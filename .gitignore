@@ -1,0 +1,18 @@
+# Build output
+bin/
+obj/
+
+# dotnet
+*.nupkg
+.dotnet/
+.dotnet-tools/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# App-specific
+appsettings.local.json
+*.env
+config.json
+downloads/           # don't commit downloaded audio files
