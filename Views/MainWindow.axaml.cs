@@ -1,6 +1,7 @@
 using System;
 using System.Diagnostics;
 using System.IO;
+using System.Threading.Tasks;
 using Avalonia.Controls;
 using Microsoft.Extensions.Configuration;
 using SoundCloudExplode;
@@ -11,16 +12,21 @@ namespace soundCloudArchiver.Views;
 public partial class MainWindow : Window
 {
     private readonly SoundCloudClient _soundcloud;
+    private readonly string _clientId;
     private readonly string _profileUrl;
     private readonly string _archivePath;
 
     public MainWindow()
     {
-        var config = new ConfigurationBuilder().AddJsonFile("appsettings.json").Build();
+        var config = new ConfigurationBuilder()
+            .AddJsonFile("appsettings.json")
+            .AddJsonFile("appsettings.local.json", optional: true)
+            .Build();
+
         _soundcloud = new SoundCloudClient(config["SoundCloud:ClientId"]!);
+        _clientId = _soundcloud.ClientId;
         _profileUrl = config["SoundCloud:ProfileUrl"]!;
         _archivePath = config["Archiver:DownloadPath"]!;
-
         InitializeComponent();
         Start();
     }
@@ -28,6 +34,7 @@ public partial class MainWindow : Window
     public void Start()
     {
         GetTracksFromPlaylist();
+        _ = GetLikedSongs();
     }
 
     private async void GetTracksFromPlaylist()
@@ -35,17 +42,36 @@ public partial class MainWindow : Window
         var playlistUrl = "https://soundcloud.com/user-144755027/sets/let-em-know";
         var tracks = await _soundcloud.Playlists.GetTracksAsync(playlistUrl);
 
-        var lines = new System.Text.StringBuilder();
+        int count = 0;
 
         foreach (var track in tracks)
         {
-            var safeName = string.Join("_", track.Title.Split(Path.GetInvalidFileNameChars()));
-            var filePath = Path.Combine(_archivePath, $"{safeName}.mp3");
-
-            Console.WriteLine($"Downloading: {track.Title}");
-            await _soundcloud.DownloadAsync(track, filePath);
+            count++;
+            Console.WriteLine($"Playlist track {count}/{tracks.Count}: {track.Title}");
         }
 
-        await System.IO.File.WriteAllTextAsync("/tmp/sc-debug.txt", lines.ToString());
+        Console.WriteLine($"Total playlist tracks: {count}");
+    }
+
+    private async Task GetLikedSongs()
+    {
+        try
+        {
+            Console.WriteLine("Fetching liked songs...");
+            var count = 0;
+            var likes = await _soundcloud.Users.GetLikedTracksAsync(_profileUrl);
+
+            foreach (var track in likes)
+            {
+                count++;
+                Console.WriteLine($"Liked track {count}: {track.Title} - {track.Duration}");
+            }
+
+            Console.WriteLine($"Total liked tracks: {count}");
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error fetching liked songs: {ex}");
+        }
     }
 }
