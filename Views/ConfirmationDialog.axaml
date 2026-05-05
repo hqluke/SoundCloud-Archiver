@@ -1,0 +1,24 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="using:soundCloudArchiver.ViewModels"
+        x:Class="soundCloudArchiver.Views.ConfirmationDialog"
+        x:DataType="vm:ConfirmationDialogViewModel"
+        Title="Confirm Changes"
+        Width="450" Height="350"
+        WindowStartupLocation="CenterOwner">
+    <StackPanel Margin="20" Spacing="15" VerticalAlignment="Center">
+        <TextBlock Text="{Binding Message}"
+                   TextWrapping="Wrap"
+                   HorizontalAlignment="Center" />
+        <StackPanel Orientation="Horizontal"
+                    HorizontalAlignment="Center"
+                    Spacing="20">
+            <Button Content="OK"
+                    Command="{Binding OkCommand}"
+                    Width="100" />
+            <Button Content="Cancel"
+                    Command="{Binding CancelCommand}"
+                    Width="100" />
+        </StackPanel>
+    </StackPanel>
+</Window>

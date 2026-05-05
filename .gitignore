@@ -16,3 +16,4 @@ appsettings.local.json
 *.env
 config.json
 downloads/           # don't commit downloaded audio files
+manifest.json

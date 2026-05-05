@@ -16,11 +16,51 @@
         <vm:MainWindowViewModel />
     </Design.DataContext>
 
-    <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
-        <Image Source="{Binding ArtworkBitmap}" Width="200" Height="200" />
-        <TextBlock Text="{Binding CurrentTrack.Title}" />
-        <TextBlock Text="{Binding CurrentTrack.Id}" />
-    </StackPanel>
+    <Grid>
+        <!-- Main Track Display (shown after setup) -->
+        <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center"
+                    IsVisible="{Binding !IsPlaylistSelectionVisible}">
+            <Image Source="{Binding ArtworkBitmap}" Width="200" Height="200" />
+            <TextBlock Text="{Binding CurrentTrack.Title}" />
+            <TextBlock Text="{Binding CurrentTrack.Id}" />
+        </StackPanel>
 
+        <!-- Playlist Selection Panel (shown during setup/management) -->
+        <Panel IsVisible="{Binding IsPlaylistSelectionVisible}"
+               HorizontalAlignment="Center" VerticalAlignment="Center">
+            <StackPanel>
+                <ItemsControl ItemsSource="{Binding PlaylistSelectionItems}">
+                    <ItemsControl.ItemsPanel>
+                        <ItemsPanelTemplate>
+                            <WrapPanel Orientation="Horizontal" />
+                        </ItemsPanelTemplate>
+                    </ItemsControl.ItemsPanel>
+                    <ItemsControl.DataTemplates>
+                        <DataTemplate x:DataType="vm:PlaylistSelectionItem">
+                            <StackPanel Margin="10" HorizontalAlignment="Center" VerticalAlignment="Center">
+                                <Image Source="{Binding ArtworkBitmap}" Width="200" Height="200" Stretch="Uniform" />
+                                <TextBlock Text="{Binding Playlist.Title}"
+                                           FontSize="14" FontWeight="Bold"
+                                           HorizontalAlignment="Center" />
+                                <TextBlock Text="{Binding Playlist.Permalink, StringFormat='/{0}'}"
+                                           FontStyle="Italic"
+                                           HorizontalAlignment="Center" />
+                                <CheckBox IsChecked="{Binding IsTracked}"
+                                          Content="Track Playlist"
+                                          HorizontalAlignment="Center" />
+                            </StackPanel>
+                        </DataTemplate>
+                    </ItemsControl.DataTemplates>
+                </ItemsControl>
+                <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Margin="0 10 0 0">
+                    <Button Command="{Binding SavePlaylistSelectionCommand}"
+                            Content="Save Changes" />
+                    <Button Command="{Binding CancelPlaylistSelectionCommand}"
+                            Content="Cancel"
+                            Margin="10 0 0 0" />
+                </StackPanel>
+            </StackPanel>
+        </Panel>
+    </Grid>
 
 </Window>
