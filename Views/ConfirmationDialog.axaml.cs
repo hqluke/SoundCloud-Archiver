@@ -1,35 +1,24 @@
 using System.Threading.Tasks;
 using Avalonia.Controls;
+using Avalonia.Interactivity;
 using soundCloudArchiver.ViewModels;
 
 namespace soundCloudArchiver.Views;
 
 public partial class ConfirmationDialog : Window
 {
-    private readonly ConfirmationDialogViewModel? _viewModel;
-
-    // Parameterless constructor for Avalonia XAML loader
     public ConfirmationDialog()
     {
         InitializeComponent();
     }
 
-    public ConfirmationDialog(string message) : this()
+    public ConfirmationDialog(string message)
+        : this()
     {
-        _viewModel = new ConfirmationDialogViewModel { Message = message };
-        DataContext = _viewModel;
-
-        _viewModel.Result = new TaskCompletionSource<bool>();
-
-        Closed += (_, _) =>
-        {
-            _viewModel.Result.TrySetResult(false);
-        };
+        DataContext = new ConfirmationDialogViewModel { Message = message };
     }
 
-    public new Task<bool> ShowDialog(Window owner)
-    {
-        base.ShowDialog(owner);
-        return _viewModel!.Result!.Task;
-    }
+    private void OnOkClicked(object? sender, RoutedEventArgs e) => Close(true);
+
+    private void OnCancelClicked(object? sender, RoutedEventArgs e) => Close(false);
 }
