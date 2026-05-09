@@ -7,8 +7,7 @@ public class TrackManifestEntry
 {
     public long Id { get; set; }
     public string Title { get; set; } = "";
-    public bool InLikes { get; set; } = false;
-    public List<long> InPlaylists { get; set; } = new();
+    public HashSet<long> InPlaylists { get; set; } = new();
     public bool IsKept { get; set; } = false;
     public string ArtworkPath { get; set; } = "";
 }
