@@ -1,29 +1,28 @@
 using System;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Net.Http;
-using System.Text.Json;
 using System.Threading.Tasks;
 using Avalonia.Controls;
 using Avalonia.Media.Imaging;
 using Microsoft.Extensions.Configuration;
 using soundCloudArchiver.Models;
+using soundCloudArchiver.Services;
 using soundCloudArchiver.ViewModels;
 using SoundCloudExplode;
 using SoundCloudExplode.Playlists;
-using SoundCloudExplode.Tracks;
 
 namespace soundCloudArchiver.Views;
 
 public partial class MainWindow : Window
 {
     const long LikedPlaylistId = -1;
-    private HashSet<long> _seenTrackIds = new();
-    private List<TrackedPlaylist> _TrackedPlaylists = new();
 
     private SoundCloudClient? _soundcloud;
+    private SyncService? _syncService;
+    private FolderService? _folderService;
+    private ArtworkService? _artwork;
 
     private string _profileUrl = "";
     private string _archivePath = "";
@@ -32,20 +31,12 @@ public partial class MainWindow : Window
     private string _artworkPath => Path.Combine(_archivePath, "artwork");
     private string _likedTracksPath => Path.Combine(_archivePath, "playlists", "liked");
 
-    private HttpClient _httpClient = new();
-
     private bool _IsLikedPlaylistSelected = false;
 
     private Manifest _manifest = new();
     private readonly string _manifestPath = "manifest.json";
 
     private TaskCompletionSource<bool> _playlistSelectionComplete = new();
-    private TaskCompletionSource<bool> _createSyncedPlaylistsComplete = new();
-
-    private Bitmap? _fallbackBitmap;
-    private static readonly Uri FallbackArtwork = new(
-        "https://i1.sndcdn.com/avatars-4oLYo9NB9XBQQ11s-2Kdzzg-t500x500.jpg"
-    );
 
     public MainWindow()
     {
@@ -63,7 +54,6 @@ public partial class MainWindow : Window
 
         InitializeComponent();
 
-        // Subscribe to DataContext changed to wire up events after DataContext is set
         DataContextChanged += OnDataContextChanged;
 
         Opened += async (_, _) => await InitializeAsync();
@@ -79,7 +69,7 @@ public partial class MainWindow : Window
             vm.OnCreateSyncedPlaylists += OnCreateSyncedPlaylists;
             vm.OnShowPlaylistSelection += OnShowPlaylistSelection;
             vm.OnShowSyncedPlaylistView += OnShowSyncedPlaylistView;
-            DataContextChanged -= OnDataContextChanged; // Unsubscribe after wiring up
+            DataContextChanged -= OnDataContextChanged;
         }
     }
 
@@ -92,95 +82,63 @@ public partial class MainWindow : Window
         _soundcloud = new SoundCloudClient(clientId);
         Console.WriteLine("App settings loaded");
 
-        LoadManifest();
+        _manifest = ManifestStore.Load(_manifestPath, _likedTracksPath);
+
+        _artwork = new ArtworkService(http, _artworkPath);
+        _syncService = new SyncService(_soundcloud, _profileUrl, _tracksPath, _artwork);
+        _folderService = new FolderService(_archivePath, _likedTracksPath);
 
         if (!_manifest.AppState.IsInitialSetupComplete)
         {
             _playlistSelectionComplete = new TaskCompletionSource<bool>();
-            await ShowPlaylistSelectionAsync(http);
-            // wait for playlist selection to complete
+            await ShowPlaylistSelectionAsync();
             var saved = await _playlistSelectionComplete.Task;
             if (saved)
-                await SyncTracksAsync(http);
+                await SyncTracksAsync();
         }
         else
         {
-            var vm = (MainWindowViewModel)DataContext!;
-            foreach (var playlist in _TrackedPlaylists)
-            {
-                var item = new SyncedPlaylistItem(playlist);
-                if (File.Exists(playlist.ArtworkPath))
-                    item.ArtworkBitmap = new Bitmap(playlist.ArtworkPath);
-                else
-                    item.ArtworkBitmap = await FetchBitmap(http, FallbackArtwork);
-                vm.SyncedPlaylistItems.Add(item);
-            }
-
+            await PopulateTrackedPlaylists();
             _IsLikedPlaylistSelected =
                 _manifest.TrackedPlaylists[LikedPlaylistId].TrackIds.Count > 0;
-
-            if (_IsLikedPlaylistSelected)
-            {
-                var likedPlaylist = _manifest.TrackedPlaylists[LikedPlaylistId];
-                var likedItem = new SyncedPlaylistItem(likedPlaylist);
-                if (File.Exists(likedPlaylist.ArtworkPath))
-                    likedItem.ArtworkBitmap = new Bitmap(likedPlaylist.ArtworkPath);
-                else
-                    likedItem.ArtworkBitmap = await FetchBitmap(http, FallbackArtwork);
-                vm.SyncedPlaylistItems.Add(likedItem);
-            }
-
-            vm.AreSyncedPlaylistsCreated = true;
-            await SyncTracksAsync(http);
+            await SyncTracksAsync();
         }
     }
 
-    private void LoadManifest()
+    private async Task PopulateTrackedPlaylists()
     {
-        if (File.Exists(_manifestPath))
+        var vm = (MainWindowViewModel)DataContext!;
+        vm.TrackedPlaylists.Clear();
+
+        foreach (var (id, tracked) in _manifest.TrackedPlaylists)
         {
-            var json = File.ReadAllText(_manifestPath);
-            _manifest = JsonSerializer.Deserialize<Manifest>(json) ?? new Manifest();
-        }
-        else
-        {
-            _manifest = new Manifest();
-        }
-        if (!_manifest.TrackedPlaylists.ContainsKey(LikedPlaylistId))
-        {
-            _manifest.TrackedPlaylists[LikedPlaylistId] = new TrackedPlaylist
-            {
-                Id = LikedPlaylistId,
-                Title = "Liked_Songs",
-                FolderPath = _likedTracksPath,
-            };
+            var item = new PlaylistViewModel(tracked);
+            if (File.Exists(tracked.ArtworkPath))
+                item.ArtworkBitmap = new Bitmap(tracked.ArtworkPath);
+            else
+                item.ArtworkBitmap = await _artwork!.FetchBitmap(null);
+
+            vm.TrackedPlaylists.Add(item);
         }
 
-        _TrackedPlaylists = _manifest
-            .TrackedPlaylists.Values.Where(x => x.Id != LikedPlaylistId)
-            .ToList();
+        var liked = vm.TrackedPlaylists.FirstOrDefault(p => p.IsLiked);
+        if (liked != null && liked.ArtworkBitmap == null)
+            liked.ArtworkBitmap = await _artwork!.FetchBitmap(null);
     }
 
-    private void SaveManifest()
-    {
-        var json = JsonSerializer.Serialize(
-            _manifest,
-            new JsonSerializerOptions { WriteIndented = true }
-        );
-        File.WriteAllText(_manifestPath, json);
-    }
-
-    private async Task ShowPlaylistSelectionAsync(HttpClient http)
+    private async Task ShowPlaylistSelectionAsync()
     {
         var vm = (MainWindowViewModel)DataContext!;
 
-        if (vm.PlaylistSelectionItems.Count > 0)
+        vm.IsPlaylistSelectionVisible = true;
+
+        if (vm.AllPlaylists.Count > 0)
         {
-            foreach (var item in vm.PlaylistSelectionItems)
+            foreach (var item in vm.AllPlaylists)
             {
-                item.IsTracked = item.Playlist.Permalink?.Equals("liked") == true
+                item.IsSelected = item.IsLiked
                     ? _manifest.TrackedPlaylists[LikedPlaylistId].TrackIds.Count > 0
-                    : _manifest.TrackedPlaylists.ContainsKey(item.Playlist.Id ?? 0);
+                    : _manifest.TrackedPlaylists.ContainsKey(item.Id);
             }
             vm.IsPlaylistSelectionVisible = true;
             return;
@@ -198,33 +156,27 @@ public partial class MainWindow : Window
                 allPlaylists.Add(playlist);
                 Console.WriteLine($"Fetched playlist: {playlist.Title} (ID: {playlist.Id})");
             }
-            var fakePlaylist = new Playlist { Title = "Liked_Songs", Permalink = "liked" };
-            allPlaylists.Add(fakePlaylist);
+            allPlaylists.Add(new Playlist { Title = "Liked_Songs", Permalink = "liked" });
 
             Console.WriteLine($"Total playlists fetched: {allPlaylists.Count}");
 
             Console.WriteLine("Fetching artwork for playlists...");
             foreach (var playlist in allPlaylists)
             {
-                var isTracked =
-                    playlist.Permalink?.Equals("liked") == true
-                        ? _manifest.TrackedPlaylists[LikedPlaylistId].TrackIds.Count > 0
-                        : _manifest.TrackedPlaylists.ContainsKey(playlist.Id ?? 0);
-                var item = new PlaylistSelectionItem(playlist, isTracked);
+                var item = new PlaylistViewModel(playlist);
+                item.IsSelected = item.IsLiked
+                    ? _manifest.TrackedPlaylists[LikedPlaylistId].TrackIds.Count > 0
+                    : _manifest.TrackedPlaylists.ContainsKey(item.Id);
 
-                var artworkPath = await FetchAndSaveArtwork(
-                    http,
+                var artworkPath = await _artwork!.FetchAndSaveArtwork(
                     playlist.Title!,
                     playlist.ArtworkUrl
                 );
                 if (File.Exists(artworkPath))
                     item.ArtworkBitmap = new Bitmap(artworkPath);
 
-                vm.PlaylistSelectionItems.Add(item);
+                vm.AllPlaylists.Add(item);
             }
-
-            vm.IsPlaylistSelectionVisible = true;
-            Console.WriteLine("Playlist selection UI should now be visible");
         }
         catch (Exception ex)
         {
@@ -237,17 +189,17 @@ public partial class MainWindow : Window
         Console.WriteLine("Saving playlist selection");
         var vm = (MainWindowViewModel)DataContext!;
 
-        var toTrack = new List<PlaylistSelectionItem>();
-        var toUntrack = new List<PlaylistSelectionItem>();
+        var toTrack = new List<PlaylistViewModel>();
+        var toUntrack = new List<PlaylistViewModel>();
 
-        foreach (var item in vm.PlaylistSelectionItems)
+        foreach (var item in vm.AllPlaylists)
         {
-            var currentlyTracked = item.Playlist.Permalink?.Equals("liked") == true
+            var tracked = item.IsLiked
                 ? _manifest.TrackedPlaylists[LikedPlaylistId].TrackIds.Count > 0
-                : _manifest.TrackedPlaylists.ContainsKey(item.Playlist.Id ?? 0);
-            if (item.IsTracked && !currentlyTracked)
+                : _manifest.TrackedPlaylists.ContainsKey(item.Id);
+            if (item.IsSelected && !tracked)
                 toTrack.Add(item);
-            else if (!item.IsTracked && currentlyTracked)
+            else if (!item.IsSelected && tracked)
                 toUntrack.Add(item);
         }
 
@@ -256,7 +208,7 @@ public partial class MainWindow : Window
         {
             message += $"Start tracking {toTrack.Count} playlists:\n";
             foreach (var item in toTrack)
-                message += $"  • {item.Playlist.Title}_{item.Playlist.Permalink}\n";
+                message += $"  \u2022 {item.Title}_{item.Permalink}\n";
         }
         if (toUntrack.Count > 0)
         {
@@ -264,12 +216,13 @@ public partial class MainWindow : Window
                 message += "\n";
             message += $"Untrack {toUntrack.Count} playlists:\n";
             foreach (var item in toUntrack)
-                message += $"  • {item.Playlist.Title}_{item.Playlist.Permalink}\n";
+                message += $"  \u2022 {item.Title}_{item.Permalink}\n";
         }
 
         if (string.IsNullOrEmpty(message))
         {
             vm.IsPlaylistSelectionVisible = false;
+            _playlistSelectionComplete.TrySetResult(true);
             return true;
         }
 
@@ -283,47 +236,36 @@ public partial class MainWindow : Window
 
         foreach (var item in toTrack)
         {
-            if (item.Playlist.Permalink?.Equals("liked") == true)
+            item.IsTracked = true;
+
+            if (item.IsLiked)
             {
                 _IsLikedPlaylistSelected = true;
-                TrackedPlaylist likedPlaylist = new()
+                _manifest.TrackedPlaylists[LikedPlaylistId] = new TrackedPlaylist
                 {
                     Id = LikedPlaylistId,
-                    Permalink = item.Playlist.Permalink ?? "liked",
-                    Title = item.Playlist.Title ?? "Liked_Songs",
+                    Permalink = item.Permalink,
+                    Title = item.Title,
                     PermalinkUrl = "",
                     FolderPath = _likedTracksPath,
                 };
-                _manifest.TrackedPlaylists[LikedPlaylistId] = likedPlaylist;
                 continue;
             }
 
-            var folderName = $"{item.Playlist.Title}_{item.Playlist.Permalink}".Replace("/", "_");
+            var folderName = $"{item.Title}_{item.Permalink}".Replace("/", "_");
             var folderPath = Path.Combine(_archivePath, "playlists", folderName);
-
-            var safeTitle = string.Concat(
-                item.Playlist.Title!.Split(Path.GetInvalidFileNameChars())
-            );
+            var safeTitle = string.Concat(item.Title.Split(Path.GetInvalidFileNameChars()));
             var artworkPath = Path.Combine(_artworkPath, safeTitle + ".jpg");
 
-            var playlist = new TrackedPlaylist
-            {
-                Id = item.Playlist.Id ?? 0,
-                Permalink = item.Playlist.Permalink!,
-                Title = item.Playlist.Title!,
-                PermalinkUrl = item.Playlist.PermalinkUrl?.ToString() ?? "",
-                ArtworkPath = artworkPath,
-                FolderPath = folderPath,
-            };
+            item.ArtworkPath = artworkPath;
+            item.FolderPath = folderPath;
 
-            _TrackedPlaylists.Add(playlist);
-
-            _manifest.TrackedPlaylists[item.Playlist.Id ?? 0] = new TrackedPlaylist
+            _manifest.TrackedPlaylists[item.Id] = new TrackedPlaylist
             {
-                Id = item.Playlist.Id ?? 0,
-                Permalink = item.Playlist.Permalink!,
-                Title = item.Playlist.Title!,
-                PermalinkUrl = item.Playlist.PermalinkUrl?.ToString() ?? "",
+                Id = item.Id,
+                Permalink = item.Permalink,
+                Title = item.Title,
+                PermalinkUrl = item.PermalinkUrl ?? "",
                 ArtworkPath = artworkPath,
                 FolderPath = folderPath,
             };
@@ -331,50 +273,31 @@ public partial class MainWindow : Window
 
         foreach (var item in toUntrack)
         {
-            if (item.Playlist.Permalink?.Equals("liked") == true)
+            item.IsTracked = false;
+
+            if (item.IsLiked)
             {
                 _IsLikedPlaylistSelected = false;
                 _manifest.TrackedPlaylists[LikedPlaylistId].TrackIds.Clear();
                 continue;
             }
 
-            var playlistId = item.Playlist.Id ?? 0;
-            _TrackedPlaylists.RemoveAll(x => x.Id == playlistId);
-            _manifest.TrackedPlaylists.Remove(playlistId);
+            _manifest.TrackedPlaylists.Remove(item.Id);
             foreach (var track in _manifest.Tracks.Values)
             {
-                if (track.InPlaylists.Contains(playlistId))
-                {
-                    track.InPlaylists.Remove(playlistId);
-                }
+                if (track.InPlaylists.Contains(item.Id))
+                    track.InPlaylists.Remove(item.Id);
             }
         }
 
-        vm.SyncedPlaylistItems.Clear();
+        await RebuildTrackedPlaylists();
 
-        if (_IsLikedPlaylistSelected)
-        {
-            var likedPlaylist = _manifest.TrackedPlaylists[LikedPlaylistId];
-            var likedItem = new SyncedPlaylistItem(likedPlaylist);
-            likedItem.ArtworkBitmap = await FetchBitmap(_httpClient, FallbackArtwork);
-            vm.SyncedPlaylistItems.Add(likedItem);
-        }
-
-        foreach (var playlist in _TrackedPlaylists)
-        {
-            var item = new SyncedPlaylistItem(playlist);
-            if (File.Exists(playlist.ArtworkPath))
-                item.ArtworkBitmap = new Bitmap(playlist.ArtworkPath);
-            else
-                item.ArtworkBitmap = await FetchBitmap(_httpClient, FallbackArtwork);
-            vm.SyncedPlaylistItems.Add(item);
-        }
-
-        vm.AreSyncedPlaylistsCreated = true;
         _manifest.AppState.IsInitialSetupComplete = true;
-        SaveManifest();
-        Console.WriteLine("Creating playlist folders");
-        CreatePlaylistFolders();
+        ManifestStore.Save(_manifest, _manifestPath);
+
+        _folderService!.CreateAllFolders();
+        _folderService.RemoveOrphanedFolders(_manifest);
+        _folderService.CreateTrackedPlaylistFolders(_manifest);
 
         vm.IsPlaylistSelectionVisible = false;
         _playlistSelectionComplete.TrySetResult(true);
@@ -382,61 +305,62 @@ public partial class MainWindow : Window
         return true;
     }
 
+    private async Task RebuildTrackedPlaylists()
+    {
+        var vm = (MainWindowViewModel)DataContext!;
+        vm.TrackedPlaylists.Clear();
+
+        foreach (var (id, tracked) in _manifest.TrackedPlaylists)
+        {
+            var item = new PlaylistViewModel(tracked);
+
+            if (_IsLikedPlaylistSelected && id == LikedPlaylistId)
+                item.ArtworkBitmap = await _artwork!.FetchBitmap(null);
+
+            if (id != LikedPlaylistId)
+            {
+                if (File.Exists(tracked.ArtworkPath))
+                    item.ArtworkBitmap = new Bitmap(tracked.ArtworkPath);
+                else
+                    item.ArtworkBitmap = await _artwork!.FetchBitmap(null);
+            }
+
+            vm.TrackedPlaylists.Add(item);
+        }
+
+        foreach (var playlist in vm.AllPlaylists)
+        {
+            if (playlist.IsLiked)
+                playlist.IsTracked = _manifest.TrackedPlaylists[LikedPlaylistId].TrackIds.Count > 0;
+            else
+                playlist.IsTracked = _manifest.TrackedPlaylists.ContainsKey(playlist.Id);
+        }
+    }
+
     private void OnCancelPlaylistSelection()
     {
         Console.WriteLine("Cancelling playlist selection");
         var vm = (MainWindowViewModel)DataContext!;
-        foreach (var item in vm.PlaylistSelectionItems)
+        foreach (var item in vm.AllPlaylists)
         {
             if (!_manifest.AppState.IsInitialSetupComplete)
-            {
-                item.IsTracked = false;
-            }
+                item.IsSelected = false;
             else
-            {
-                item.IsTracked = item.Playlist.Permalink?.Equals("liked") == true
+                item.IsSelected = item.IsLiked
                     ? _manifest.TrackedPlaylists[LikedPlaylistId].TrackIds.Count > 0
-                    : _manifest.TrackedPlaylists.ContainsKey(item.Playlist.Id ?? 0);
-            }
+                    : _manifest.TrackedPlaylists.ContainsKey(item.Id);
         }
         vm.IsPlaylistSelectionVisible = true;
-        _playlistSelectionComplete.TrySetResult(false);
     }
 
     private async Task OnCreateSyncedPlaylists()
     {
         Console.WriteLine("Creating Synced Playlists");
-        using var http = new HttpClient();
         var vm = (MainWindowViewModel)DataContext!;
         vm.ShowSyncedPlaylists = false;
         vm.ShowTracksSyncing = false;
 
-        vm.SyncedPlaylistItems.Clear();
-
-        _IsLikedPlaylistSelected = _manifest.TrackedPlaylists[LikedPlaylistId].TrackIds.Count > 0;
-
-        if (_IsLikedPlaylistSelected)
-        {
-            var likedPlaylist = _manifest.TrackedPlaylists[LikedPlaylistId];
-            var likedItem = new SyncedPlaylistItem(likedPlaylist);
-            if (File.Exists(likedPlaylist.ArtworkPath))
-                likedItem.ArtworkBitmap = new Bitmap(likedPlaylist.ArtworkPath);
-            else
-                likedItem.ArtworkBitmap = await FetchBitmap(http, FallbackArtwork);
-            vm.SyncedPlaylistItems.Add(likedItem);
-        }
-
-        foreach (var playlist in _TrackedPlaylists)
-        {
-            SyncedPlaylistItem item = new SyncedPlaylistItem(playlist);
-            if (File.Exists(item.Playlist.ArtworkPath))
-                item.ArtworkBitmap = new Bitmap(item.Playlist.ArtworkPath);
-            else
-                item.ArtworkBitmap = await FetchBitmap(http, FallbackArtwork);
-
-            vm.SyncedPlaylistItems.Add(item);
-        }
-        vm.AreSyncedPlaylistsCreated = true;
+        await RebuildTrackedPlaylists();
     }
 
     private void PlaylistSeclectionCompleted(object? sender, EventArgs e)
@@ -453,461 +377,56 @@ public partial class MainWindow : Window
         vm.ShowSyncedPlaylists = false;
         vm.ShowTracksSyncing = true;
         _IsLikedPlaylistSelected = _manifest.TrackedPlaylists[LikedPlaylistId].TrackIds.Count > 0;
-        await SyncTracksAsync(new HttpClient());
+        await SyncTracksAsync();
     }
 
-    private async Task OnShowSyncedPlaylistView()
+    private void OnShowSyncedPlaylistView()
     {
         var vm = (MainWindowViewModel)DataContext!;
         vm.IsPlaylistSelectionVisible = false;
         vm.ShowTracksSyncing = false;
         vm.ShowSyncedPlaylists = true;
+        _playlistSelectionComplete.TrySetResult(false);
     }
 
-    private async void OnShowPlaylistSelection()
+    private async Task OnShowPlaylistSelection()
     {
         using var http = new HttpClient();
         var vm = (MainWindowViewModel)DataContext!;
         vm.ShowSyncedPlaylists = false;
         vm.ShowTracksSyncing = false;
         _playlistSelectionComplete = new TaskCompletionSource<bool>();
-        await ShowPlaylistSelectionAsync(http);
-        // wait for playlist selection to complete
+
+        // recreate artwork service with new http client for this session
+        _artwork = new ArtworkService(http, _artworkPath);
+
+        await ShowPlaylistSelectionAsync();
         var saved = await _playlistSelectionComplete.Task;
         if (saved)
-            await SyncTracksAsync(http);
+            await SyncTracksAsync();
     }
 
-    private void CreatePlaylistFolders()
+    private async Task SyncTracksAsync()
     {
-        Console.WriteLine("Creating folders");
-        Console.WriteLine("Checking base track folder");
-        bool doesBaseTracksFolderExist = Directory.Exists(_tracksPath);
-        if (!doesBaseTracksFolderExist)
+        foreach (var (id, tracked) in _manifest.TrackedPlaylists)
         {
-            Directory.CreateDirectory(_tracksPath);
-            Console.WriteLine("Created base tracks folder");
-        }
-        else
-            Console.WriteLine("Base tracks folder already exists");
-
-        Console.WriteLine("Checking base liked tracks folder");
-        bool doesBaseLikedTracksFolderExist = Directory.Exists(_likedTracksPath);
-        if (!doesBaseLikedTracksFolderExist)
-        {
-            Directory.CreateDirectory(_likedTracksPath);
-            Console.WriteLine("Created base liked tracks folder");
-        }
-
-        Console.WriteLine("Checking base playlists folder");
-        bool doesBasePlaylistsFolderExist = Directory.Exists(_playlistsPath);
-        if (!doesBasePlaylistsFolderExist)
-        {
-            Directory.CreateDirectory(_playlistsPath);
-            Console.WriteLine("Created base playlists folder");
-        }
-        else
-            Console.WriteLine("Base playlists folder already exists");
-
-        Console.WriteLine("Checking base artwork folder");
-        bool doesBaseArtworkFolderExist = Directory.Exists(_artworkPath);
-        if (!doesBaseArtworkFolderExist)
-        {
-            Directory.CreateDirectory(_artworkPath);
-            Console.WriteLine("Created base artwork folder");
-        }
-        else
-            Console.WriteLine("Base artwork folder already exists");
-
-        // Delete all playlist folders that are not in the manifest
-        Console.WriteLine("Deleting playlist folders not in manifest");
-        var playlistPaths = Directory.GetDirectories(_archivePath + "/playlists");
-        foreach (var playlist in playlistPaths)
-        {
-            if (_manifest.TrackedPlaylists.Values.Any(x => x.FolderPath == playlist))
-            {
-                Console.WriteLine($"Playlist {playlist} already exists in folder");
+            if (id == LikedPlaylistId && !_IsLikedPlaylistSelected)
                 continue;
-            }
-            else
-            {
-                Directory.Delete(playlist, true);
-                Console.WriteLine($"Deleted playlist {playlist}");
-            }
-        }
-        // Create all playlist folders that are in the manifest
-        Console.WriteLine("Creating playlist folders");
-        foreach (var playlist in _manifest.TrackedPlaylists.Values)
-        {
-            Console.WriteLine($"Creating playlist folder {playlist.FolderPath}");
-            if (!Directory.Exists(playlist.FolderPath))
-            {
-                Directory.CreateDirectory(playlist.FolderPath);
-            }
-        }
-        Console.WriteLine("Playlist folders handled");
-    }
 
-    private async Task SyncTracksAsync(HttpClient http)
-    {
-        if (_IsLikedPlaylistSelected)
-            await DownloadLikedSongsAsync(http);
-
-        foreach (var playlist in _TrackedPlaylists)
-        {
-            await HandleTracksFromPlaylistAsync(http, playlist);
+            await _syncService!.SyncPlaylistAsync(
+                _manifest,
+                _manifestPath,
+                tracked,
+                // have SyncPlaylistAsync set the CurrentTrack and ArtworkBitmap properties every time it finishes handling a track
+                (track, bitmap) =>
+                {
+                    var vm = (MainWindowViewModel)DataContext!;
+                    vm.CurrentTrack = track;
+                    vm.ArtworkBitmap = bitmap;
+                }
+            );
         }
 
         PlaylistSeclectionCompleted(this, EventArgs.Empty);
-    }
-
-    private async Task DownloadLikedSongsAsync(HttpClient http)
-    {
-        int alreadyDownloaded = 0;
-        int downloaded = 0;
-        int failed = 0;
-        HashSet<string> FailedDownloads = new();
-        _seenTrackIds = new();
-        var playlist = _manifest.TrackedPlaylists[LikedPlaylistId];
-        Console.WriteLine($"\n\nFetching Liked Songs...");
-        await foreach (var track in GetLikedSongs())
-        {
-            _seenTrackIds.Add(track.Id);
-
-            Console.WriteLine($"{_seenTrackIds.Count} : Checking track {track.Title}");
-
-            var trackId = track.Id.ToString();
-            var fileName =
-                string.Concat(track.Title!.Split(Path.GetInvalidFileNameChars())) + ".mp3";
-            var filePath = Path.Combine(_tracksPath, fileName);
-
-            var artworkPath = await FetchAndSaveArtwork(http, track.Title, track.ArtworkUrl);
-
-            TrackManifestEntry currentTrack;
-
-            if (!_manifest.Tracks.ContainsKey(trackId))
-            {
-                currentTrack = _manifest.Tracks[trackId] = new TrackManifestEntry
-                {
-                    Id = track.Id,
-                    Title = track.Title,
-                    InPlaylists = new HashSet<long> { playlist.Id },
-                    ArtworkPath = artworkPath,
-                };
-            }
-            else
-            {
-                Console.WriteLine($"Track entry already exists in {playlist.Title}");
-                currentTrack = _manifest.Tracks[trackId];
-                _manifest.Tracks[trackId].InPlaylists.Add(playlist.Id);
-            }
-
-            if (!_manifest.TrackedPlaylists[playlist.Id].TrackIds.Contains(track.Id))
-            {
-                _manifest.TrackedPlaylists[playlist.Id].TrackIds.Add(track.Id);
-            }
-
-            if (!File.Exists(filePath))
-            {
-                try
-                {
-                    Console.WriteLine($"Downloading...");
-                    await _soundcloud!.DownloadAsync(track, filePath);
-                    if (File.Exists(filePath))
-                    {
-                        Console.WriteLine($"Downloaded successfully");
-                        if (_manifest.FailedDownloads.ContainsKey(track.Id))
-                        {
-                            _manifest.FailedDownloads[track.Id].InPlaylists.Remove(playlist.Id);
-                        }
-                        downloaded++;
-                    }
-                    else
-                    {
-                        _manifest.FailedDownloads[track.Id] = currentTrack;
-                        Console.WriteLine(
-                            $"-----------Failed to download {track.Title}-----------\n No file written"
-                        );
-                        FailedDownloads.Add(track.Title);
-                        failed++;
-                    }
-                }
-                catch (HttpRequestException ex)
-                {
-                    _manifest.FailedDownloads[track.Id] = currentTrack;
-                    Console.WriteLine(
-                        $"-----------Failed to download {track.Title}-----------\n {ex.Message}"
-                    );
-                    FailedDownloads.Add(track.Title);
-                    failed++;
-                }
-            }
-            else
-            {
-                Console.WriteLine($"File already exists, skipping...");
-                alreadyDownloaded++;
-            }
-
-            SaveManifest();
-
-            if (File.Exists(filePath))
-            {
-                var symlinkName =
-                    string.Concat(track.Title!.Split(Path.GetInvalidFileNameChars())) + ".mp3";
-                var symlinkPath = Path.Combine(playlist.FolderPath, symlinkName);
-                if (!File.Exists(symlinkPath))
-                {
-                    File.CreateSymbolicLink(symlinkPath, filePath);
-                    Console.WriteLine("Symlink created");
-                }
-                else
-                {
-                    Console.WriteLine($"Symlink already exists, skipping");
-                }
-            }
-
-            var vm = (MainWindowViewModel)DataContext!;
-            vm.CurrentTrack = track;
-            vm.ArtworkBitmap = File.Exists(artworkPath)
-                ? new Bitmap(artworkPath)
-                : await FetchBitmap(http, track.ArtworkUrl);
-        }
-
-        int playlistLength = playlist.Title.Length;
-        string bottomLine = new string('-', 21 + playlistLength + 10);
-        Console.WriteLine(
-            $"\n----------{playlist.Title} completed-----------\n"
-                + $"Total Songs Processed: {_seenTrackIds.Count}\n"
-                + $"Already on disk: {alreadyDownloaded}\n"
-                + $"Downloaded: {downloaded}\n"
-                + $"Failed to download: {failed}\n"
-                + $"{string.Join(", ", FailedDownloads)}\n"
-                + bottomLine
-        );
-        FindPotentiallyDeletedTracks(_manifest.TrackedPlaylists[playlist.Id]);
-    }
-
-    private void FindPotentiallyDeletedTracks(TrackedPlaylist playlist)
-    {
-        var msg = $"\nFinding potentially deleted tracks in {playlist.Title}";
-        Console.WriteLine(msg);
-        Console.WriteLine(new string('-', msg.Length));
-        int potentialDeleted = 0;
-        int restored = 0;
-        int noChanges = 0;
-        HashSet<long> potentiallyDeletedTracks = new();
-        foreach (var track in playlist.TrackIds)
-        {
-            if (!_seenTrackIds.Contains(track))
-            {
-                Console.WriteLine($"Track {track} is no longer in {playlist.Title}");
-                Console.WriteLine($"Added to potentially deleted tracks");
-                if (!_manifest.PotentiallyDeletedTracks.ContainsKey(track))
-                    _manifest.PotentiallyDeletedTracks[track] = new HashSet<long>();
-                _manifest.PotentiallyDeletedTracks[track].Add(playlist.Id);
-                potentialDeleted++;
-                potentiallyDeletedTracks.Add(track);
-            }
-            else if (
-                _manifest.PotentiallyDeletedTracks.ContainsKey(track)
-                && _manifest.PotentiallyDeletedTracks[track].Contains(playlist.Id)
-            )
-            {
-                Console.WriteLine(
-                    $"Track {track} is now in {playlist.Title}.\nRemoved from potentially deleted tracks"
-                );
-                _manifest.PotentiallyDeletedTracks[track].Remove(playlist.Id);
-                restored++;
-            }
-            else
-            {
-                noChanges++;
-            }
-        }
-        Console.WriteLine(
-            $"Potentially deleted tracks in {playlist.Title}: {potentialDeleted}/{playlist.TrackIds.Count} \n"
-                + $"Restored tracks: {restored}/{playlist.TrackIds.Count} \n"
-                + $"No changes: {noChanges}/{playlist.TrackIds.Count}"
-        );
-        if (potentiallyDeletedTracks.Count > 0)
-        {
-            Console.WriteLine(
-                $"\nPotentially deleted tracks: {string.Join(", ", potentiallyDeletedTracks)}"
-            );
-        }
-        Console.WriteLine(new string('-', msg.Length));
-    }
-
-    private async Task HandleTracksFromPlaylistAsync(HttpClient http, TrackedPlaylist playlist)
-    {
-        int alreadyDownloaded = 0;
-        int downloaded = 0;
-        int failed = 0;
-        HashSet<string> FailedDownloads = new();
-        _seenTrackIds = new();
-        Console.WriteLine($"\n\nFetching tracks from playlist {playlist.Title}");
-        await foreach (var track in GetTracksFromPlaylist(playlist.PermalinkUrl))
-        {
-            Console.WriteLine($"{_seenTrackIds.Count} : Checking track {track.Title}");
-
-            _seenTrackIds.Add(track.Id);
-
-            var trackId = track.Id.ToString();
-            var fileName =
-                string.Concat(track.Title!.Split(Path.GetInvalidFileNameChars())) + ".mp3";
-            var filePath = Path.Combine(_tracksPath, fileName);
-
-            var artworkPath = await FetchAndSaveArtwork(http, track.Title, track.ArtworkUrl);
-
-            TrackManifestEntry currentTrack;
-
-            if (!_manifest.Tracks.ContainsKey(trackId))
-            {
-                Console.WriteLine($"Creating new track entry");
-                currentTrack = _manifest.Tracks[trackId] = new TrackManifestEntry
-                {
-                    Id = track.Id,
-                    Title = track.Title,
-                    InPlaylists = new HashSet<long> { playlist.Id },
-                    ArtworkPath = artworkPath,
-                };
-            }
-            else
-            {
-                Console.WriteLine($"Track entry already exists in {playlist.Title}");
-                currentTrack = _manifest.Tracks[trackId];
-                _manifest.Tracks[trackId].InPlaylists.Add(playlist.Id);
-            }
-
-            if (!_manifest.TrackedPlaylists[playlist.Id].TrackIds.Contains(track.Id))
-                _manifest.TrackedPlaylists[playlist.Id].TrackIds.Add(track.Id);
-
-            if (!File.Exists(filePath))
-            {
-                try
-                {
-                    Console.WriteLine($"Downloading...");
-                    await _soundcloud!.DownloadAsync(track, filePath);
-                    if (File.Exists(filePath))
-                    {
-                        Console.WriteLine($"Downloaded successfully");
-                        if (_manifest.FailedDownloads.ContainsKey(track.Id))
-                        {
-                            _manifest.FailedDownloads[track.Id].InPlaylists.Remove(playlist.Id);
-                        }
-                        downloaded++;
-                    }
-                    else
-                    {
-                        _manifest.FailedDownloads[track.Id] = currentTrack;
-                        Console.WriteLine(
-                            $"-----------Failed to download {track.Title}-----------\n No file written"
-                        );
-                        FailedDownloads.Add(track.Title);
-                        failed++;
-                    }
-                }
-                catch (HttpRequestException ex)
-                {
-                    _manifest.FailedDownloads[track.Id] = currentTrack;
-                    Console.WriteLine(
-                        $"-----------Failed to download {track.Title}-----------\n {ex.Message}"
-                    );
-                    FailedDownloads.Add(track.Title);
-                    failed++;
-                }
-            }
-            else
-            {
-                Console.WriteLine($"File already exists, skipping");
-                alreadyDownloaded++;
-            }
-
-            SaveManifest();
-
-            if (File.Exists(filePath))
-            {
-                var symlinkName =
-                    string.Concat(track.Title!.Split(Path.GetInvalidFileNameChars())) + ".mp3";
-                var symlinkPath = Path.Combine(playlist.FolderPath, symlinkName);
-                if (!File.Exists(symlinkPath))
-                {
-                    File.CreateSymbolicLink(symlinkPath, filePath);
-                    Console.WriteLine("Symlink created");
-                }
-                else
-                {
-                    Console.WriteLine($"Symlink already exists, skipping");
-                }
-            }
-
-            var vm = (MainWindowViewModel)DataContext!;
-            vm.CurrentTrack = track;
-            vm.ArtworkBitmap = File.Exists(artworkPath)
-                ? new Bitmap(artworkPath)
-                : await FetchBitmap(http, track.ArtworkUrl);
-        }
-
-        int playlistLength = playlist.Title.Length;
-        string bottomLine = new string('-', 21 + playlistLength + 10);
-        Console.WriteLine(
-            $"\n----------{playlist.Title} completed-----------\n"
-                + $"Total Songs Processed: {_seenTrackIds.Count}\n"
-                + $"Already on disk: {alreadyDownloaded}\n"
-                + $"Downloaded: {downloaded}\n"
-                + $"Failed to download: {failed}\n"
-                + $"{string.Join(", ", FailedDownloads)}\n"
-                + bottomLine
-        );
-        FindPotentiallyDeletedTracks(playlist);
-    }
-
-    private IAsyncEnumerable<Track> GetTracksFromPlaylist(string playlistUrl = "")
-    {
-        // return _soundcloud!.Playlists.GetTracksAsync(playlistUrl);
-        return _soundcloud!.Playlists.GetTracksAsync(playlistUrl).Take(5); // only get first 5
-    }
-
-    private IAsyncEnumerable<Track> GetLikedSongs()
-    {
-        return _soundcloud!.Users.GetLikedTracksAsync(_profileUrl).Take(5); // only get first 5
-        // return _soundcloud!.Users.GetLikedTracksAsync(_profileUrl);
-    }
-
-    private async Task<string> FetchAndSaveArtwork(HttpClient http, string trackTitle, Uri? url)
-    {
-        var safeName = string.Concat(trackTitle.Split(Path.GetInvalidFileNameChars()));
-        var artworkPath = Path.Combine(_artworkPath, safeName + ".jpg");
-
-        if (File.Exists(artworkPath))
-            return artworkPath;
-
-        try
-        {
-            var bytes = await http.GetByteArrayAsync(url ?? FallbackArtwork);
-            await File.WriteAllBytesAsync(artworkPath, bytes);
-        }
-        catch (HttpRequestException)
-        {
-            // save fallback artwork if track artwork fetch fails
-            var bytes = await http.GetByteArrayAsync(FallbackArtwork);
-            await File.WriteAllBytesAsync(artworkPath, bytes);
-        }
-
-        return artworkPath;
-    }
-
-    private async Task<Bitmap?> FetchBitmap(HttpClient http, Uri? url)
-    {
-        try
-        {
-            var bytes = await http.GetByteArrayAsync(url ?? FallbackArtwork);
-            return new Bitmap(new MemoryStream(bytes));
-        }
-        catch (HttpRequestException)
-        {
-            _fallbackBitmap ??= await FetchBitmap(http, FallbackArtwork);
-            return _fallbackBitmap;
-        }
     }
 }

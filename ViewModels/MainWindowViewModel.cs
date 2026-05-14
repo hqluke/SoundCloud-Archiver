@@ -6,7 +6,6 @@ using CommunityToolkit.Mvvm.Input;
 using SoundCloudExplode.Tracks;
 
 namespace soundCloudArchiver.ViewModels;
-using soundCloudArchiver.Models;
 
 public partial class MainWindowViewModel : ViewModelBase
 {
@@ -16,32 +15,28 @@ public partial class MainWindowViewModel : ViewModelBase
     [ObservableProperty]
     private Avalonia.Media.Imaging.Bitmap? _artworkBitmap;
 
-    // TODO: DOUBLE BINDING
     [ObservableProperty]
-    private bool _showSyncedPlaylists = false;
-
-    [ObservableProperty]
-    private bool _isPlaylistSelectionVisible = false;
+    private bool _showSyncedPlaylists;
 
     [ObservableProperty]
-    private bool _showTracksSyncing = false;
+    private bool _isPlaylistSelectionVisible;
 
     [ObservableProperty]
-    private bool _isInitialSetupComplete = false;
+    private bool _showTracksSyncing;
 
     [ObservableProperty]
-    private bool _areSyncedPlaylistsCreated = false;
+    private bool _isInitialSetupComplete;
 
-    public ObservableCollection<PlaylistSelectionItem> PlaylistSelectionItems { get; } = new();
+    public ObservableCollection<PlaylistViewModel> AllPlaylists { get; } = new();
 
-    public ObservableCollection<SyncedPlaylistItem> SyncedPlaylistItems { get; } = new();
+    public ObservableCollection<PlaylistViewModel> TrackedPlaylists { get; } = new();
 
     public event Func<Task<bool>>? OnSavePlaylistSelection;
     public event Action? OnCancelPlaylistSelection;
     public event Func<Task>? OnCreateSyncedPlaylists;
     public event Func<Task>? OnSyncNow;
-    public event Action? OnShowPlaylistSelection;
-    public event Func<Task>? OnShowSyncedPlaylistView;
+    public event Func<Task>? OnShowPlaylistSelection;
+    public event Action? OnShowSyncedPlaylistView;
 
     [RelayCommand]
     private async Task SavePlaylistSelection()
@@ -66,17 +61,17 @@ public partial class MainWindowViewModel : ViewModelBase
     [RelayCommand]
     private async Task ShowSyncedPlaylistView()
     {
-        if (!AreSyncedPlaylistsCreated && OnCreateSyncedPlaylists != null)
+        if (OnCreateSyncedPlaylists != null)
             await OnCreateSyncedPlaylists.Invoke();
 
-        if (OnShowSyncedPlaylistView != null)
-            await OnShowSyncedPlaylistView.Invoke();
+        OnShowSyncedPlaylistView?.Invoke();
     }
 
     [RelayCommand]
-    private void ShowPlaylistSelection()
+    private async Task ShowPlaylistSelection()
     {
-        OnShowPlaylistSelection?.Invoke();
+        if (OnShowPlaylistSelection != null)
+            await OnShowPlaylistSelection.Invoke();
     }
 
     [RelayCommand]
@@ -85,6 +80,4 @@ public partial class MainWindowViewModel : ViewModelBase
         if (OnSyncNow != null)
             await OnSyncNow.Invoke();
     }
-
-
 }

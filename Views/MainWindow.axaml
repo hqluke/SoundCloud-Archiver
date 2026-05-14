@@ -10,9 +10,6 @@
     Title="soundCloudArchiver">
 
     <Design.DataContext>
-        <!-- This only sets the DataContext for the previewer in an IDE,
-             to set the actual DataContext for runtime, set the DataContext property in code (look at
-        App.axaml.cs) -->
         <vm:MainWindowViewModel />
     </Design.DataContext>
 
@@ -25,31 +22,31 @@
             <TextBlock Text="{Binding CurrentTrack.Id}" />
         </StackPanel>
 
-        <!-- Playlist Selection Panel (shown during setup/management) -->
+        <!-- Playlist Selection Panel -->
         <Panel IsVisible="{Binding IsPlaylistSelectionVisible}"
             HorizontalAlignment="Center" VerticalAlignment="Center">
             <StackPanel>
                 <TextBlock Text="Select Playlists" FontSize="24" FontWeight="Bold"
                     HorizontalAlignment="Center" />
-                <ItemsControl ItemsSource="{Binding PlaylistSelectionItems}">
+                <ItemsControl ItemsSource="{Binding AllPlaylists}">
                     <ItemsControl.ItemsPanel>
                         <ItemsPanelTemplate>
                             <WrapPanel Orientation="Horizontal" />
                         </ItemsPanelTemplate>
                     </ItemsControl.ItemsPanel>
                     <ItemsControl.DataTemplates>
-                        <DataTemplate x:DataType="vm:PlaylistSelectionItem">
+                        <DataTemplate x:DataType="vm:PlaylistViewModel">
                             <StackPanel Margin="10" HorizontalAlignment="Center"
                                 VerticalAlignment="Center">
                                 <Image Source="{Binding ArtworkBitmap}" Width="200" Height="200"
                                     Stretch="Uniform" />
-                                <TextBlock Text="{Binding Playlist.Title}"
+                                <TextBlock Text="{Binding Title}"
                                     FontSize="14" FontWeight="Bold"
                                     HorizontalAlignment="Center" />
-                                <TextBlock Text="{Binding Playlist.Permalink, StringFormat='/{0}'}"
+                                <TextBlock Text="{Binding Permalink, StringFormat='/{0}'}"
                                     FontStyle="Italic"
                                     HorizontalAlignment="Center" />
-                                <CheckBox IsChecked="{Binding IsTracked}"
+                                <CheckBox IsChecked="{Binding IsSelected}"
                                     Content="Track Playlist"
                                     HorizontalAlignment="Center" />
                             </StackPanel>
@@ -69,27 +66,28 @@
             </StackPanel>
         </Panel>
 
+        <!-- Tracked Playlists Panel -->
         <Panel IsVisible="{Binding ShowSyncedPlaylists}"
             HorizontalAlignment="Center" VerticalAlignment="Center">
             <StackPanel>
                 <TextBlock Text="Tracked Playlists" FontSize="24" FontWeight="Bold"
                     HorizontalAlignment="Center" />
-                <ItemsControl ItemsSource="{Binding SyncedPlaylistItems}">
+                <ItemsControl ItemsSource="{Binding TrackedPlaylists}">
                     <ItemsControl.ItemsPanel>
                         <ItemsPanelTemplate>
                             <WrapPanel Orientation="Horizontal" />
                         </ItemsPanelTemplate>
                     </ItemsControl.ItemsPanel>
                     <ItemsControl.DataTemplates>
-                        <DataTemplate x:DataType="vm:SyncedPlaylistItem">
+                        <DataTemplate x:DataType="vm:PlaylistViewModel">
                             <StackPanel Margin="10" HorizontalAlignment="Center"
                                 VerticalAlignment="Center">
                                 <Image Source="{Binding ArtworkBitmap}" Width="200" Height="200"
                                     Stretch="Uniform" />
-                                <TextBlock Text="{Binding Playlist.Title}"
+                                <TextBlock Text="{Binding Title}"
                                     FontSize="14" FontWeight="Bold"
                                     HorizontalAlignment="Center" />
-                                <TextBlock Text="{Binding Playlist.Permalink, StringFormat='/{0}'}"
+                                <TextBlock Text="{Binding Permalink, StringFormat='/{0}'}"
                                     FontStyle="Italic"
                                     HorizontalAlignment="Center" />
                             </StackPanel>
@@ -102,7 +100,6 @@
                     <Button Command="{Binding ShowPlaylistSelectionCommand}"
                         Content="Select Playlists to Track"
                         Margin="10 0 0 0" />
-                    <!-- Bring up handling deleted tracks UI -->
                 </StackPanel>
             </StackPanel>
         </Panel>
