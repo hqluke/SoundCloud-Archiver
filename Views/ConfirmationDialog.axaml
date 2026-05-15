@@ -3,16 +3,24 @@
     xmlns:vm="using:soundCloudArchiver.ViewModels"
     x:Class="soundCloudArchiver.Views.ConfirmationDialog"
     x:DataType="vm:ConfirmationDialogViewModel"
-    Title="Confirm Changes"
-    Width="450" Height="350"
+    Title="{Binding Title}"
+    Width="500" Height="450"
     WindowStartupLocation="CenterOwner">
-    <StackPanel Margin="20" Spacing="15" VerticalAlignment="Center">
-        <TextBlock Text="{Binding Message}"
-            TextWrapping="Wrap"
-            HorizontalAlignment="Center" />
-        <StackPanel Orientation="Horizontal"
+    <Grid RowDefinitions="Auto,*,Auto" Margin="20">
+        <TextBlock Grid.Row="0" Text="{Binding Title}"
+            FontSize="20" FontWeight="Bold"
+            HorizontalAlignment="Center" Margin="0 0 0 15" />
+
+        <ScrollViewer Grid.Row="1"
+            MaxHeight="300" VerticalScrollBarVisibility="Auto"
+            VerticalAlignment="Center">
+            <TextBlock Text="{Binding Message}"
+                TextWrapping="Wrap" FontSize="18" />
+        </ScrollViewer>
+
+        <StackPanel Grid.Row="2" Orientation="Horizontal"
             HorizontalAlignment="Center"
-            Spacing="20">
+            Spacing="20" Margin="0 15 0 0">
             <Button Content="OK"
                 Click="OnOkClicked"
                 Width="100" />
@@ -20,5 +28,5 @@
                 Click="OnCancelClicked"
                 Width="100" />
         </StackPanel>
-    </StackPanel>
+    </Grid>
 </Window>

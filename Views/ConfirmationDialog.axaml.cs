@@ -1,4 +1,3 @@
-using System.Threading.Tasks;
 using Avalonia.Controls;
 using Avalonia.Interactivity;
 using soundCloudArchiver.ViewModels;
@@ -12,10 +11,11 @@ public partial class ConfirmationDialog : Window
         InitializeComponent();
     }
 
-    public ConfirmationDialog(string message)
+    public ConfirmationDialog(string title, string message)
         : this()
     {
-        DataContext = new ConfirmationDialogViewModel { Message = message };
+        Title = title;
+        DataContext = new ConfirmationDialogViewModel { Title = title, Message = message };
     }
 
     private void OnOkClicked(object? sender, RoutedEventArgs e) => Close(true);

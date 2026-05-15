@@ -28,7 +28,7 @@ public static class ManifestStore
             manifest.TrackedPlaylists[LikedPlaylistId] = new TrackedPlaylist
             {
                 Id = LikedPlaylistId,
-                Title = "Liked_Songs",
+                Title = "Liked Songs",
                 FolderPath = likedFolderPath,
             };
         }

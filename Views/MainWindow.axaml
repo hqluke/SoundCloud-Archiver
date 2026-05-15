@@ -1,67 +1,200 @@
 <Window xmlns="https://github.com/avaloniaui"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     xmlns:vm="using:soundCloudArchiver.ViewModels"
+    xmlns:models="using:soundCloudArchiver.Models"
     xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
     mc:Ignorable="d" d:DesignWidth="800" d:DesignHeight="450"
     x:Class="soundCloudArchiver.Views.MainWindow"
     x:DataType="vm:MainWindowViewModel"
     Icon="/Assets/avalonia-logo.ico"
-    Title="soundCloudArchiver">
+    Title="soundCloudArchiver"
+    MinWidth="840" MinHeight="560">
 
     <Design.DataContext>
         <vm:MainWindowViewModel />
     </Design.DataContext>
 
     <Grid>
-        <!-- Main Track Display (shown after setup) -->
+        <!-- Main Track Display (shown while syncing) -->
         <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center"
             IsVisible="{Binding ShowTracksSyncing}">
-            <Image Source="{Binding ArtworkBitmap}" Width="200" Height="200" />
-            <TextBlock Text="{Binding CurrentTrack.Title}" />
-            <TextBlock Text="{Binding CurrentTrack.Id}" />
+            <TextBlock Text="Preparing tracks..."
+                FontSize="20"
+                HorizontalAlignment="Center"
+                IsVisible="{Binding IsNullTrack}" />
+            <Image Source="{Binding ArtworkBitmap}" Width="200" Height="200"
+                IsVisible="{Binding HasTrack}" />
+            <StackPanel IsVisible="{Binding HasTrack}">
+                <TextBlock Text="{Binding CurrentTrack.Title}"
+                    TextWrapping="Wrap" MaxWidth="400"
+                    FontSize="20"
+                    FontWeight="Bold"
+                    HorizontalAlignment="Center" />
+                <TextBlock Text="{Binding CurrentArtist}"
+                    FontSize="14"
+                    HorizontalAlignment="Center" />
+            </StackPanel>
         </StackPanel>
 
         <!-- Playlist Selection Panel -->
-        <Panel IsVisible="{Binding IsPlaylistSelectionVisible}"
-            HorizontalAlignment="Center" VerticalAlignment="Center">
-            <StackPanel>
+        <Panel IsVisible="{Binding IsPlaylistSelectionVisible}">
+            <StackPanel VerticalAlignment="Center">
                 <TextBlock Text="Select Playlists" FontSize="24" FontWeight="Bold"
-                    HorizontalAlignment="Center" />
-                <ItemsControl ItemsSource="{Binding AllPlaylists}">
-                    <ItemsControl.ItemsPanel>
-                        <ItemsPanelTemplate>
-                            <WrapPanel Orientation="Horizontal" />
-                        </ItemsPanelTemplate>
-                    </ItemsControl.ItemsPanel>
-                    <ItemsControl.DataTemplates>
-                        <DataTemplate x:DataType="vm:PlaylistViewModel">
-                            <StackPanel Margin="10" HorizontalAlignment="Center"
-                                VerticalAlignment="Center">
-                                <Image Source="{Binding ArtworkBitmap}" Width="200" Height="200"
-                                    Stretch="Uniform" />
-                                <TextBlock Text="{Binding Title}"
-                                    FontSize="14" FontWeight="Bold"
+                    HorizontalAlignment="Center" Margin="0 10 0 10" />
+                <TextBlock Text="Loading playlists..."
+                    FontSize="20"
+                    HorizontalAlignment="Center"
+                    IsVisible="{Binding IsLoadingPlaylists}" />
+                <StackPanel IsVisible="{Binding IsNotLoadingPlaylists}">
+                    <ScrollViewer VerticalScrollBarVisibility="Auto"
+                        MaxHeight="500">
+                        <ItemsControl ItemsSource="{Binding AllPlaylists}">
+                            <ItemsControl.ItemsPanel>
+                                <ItemsPanelTemplate>
+                                    <WrapPanel Orientation="Horizontal"
+                                        HorizontalAlignment="Center" />
+                                </ItemsPanelTemplate>
+                            </ItemsControl.ItemsPanel>
+                            <ItemsControl.DataTemplates>
+                                <DataTemplate x:DataType="vm:PlaylistViewModel">
+                                    <StackPanel Width="240" Margin="10"
+                                        HorizontalAlignment="Center"
+                                        VerticalAlignment="Top">
+                                        <Image Source="{Binding ArtworkBitmap}"
+                                            Width="200" Height="200"
+                                            Stretch="Uniform" />
+                                        <TextBlock Text="{Binding Title}"
+                                            FontSize="14" FontWeight="Bold"
+                                            TextWrapping="Wrap" MaxWidth="220"
+                                            HorizontalAlignment="Center" />
+                                        <TextBlock Text="{Binding Permalink, StringFormat='/{0}'}"
+                                            FontStyle="Italic"
+                                            TextWrapping="Wrap" MaxWidth="220"
+                                            HorizontalAlignment="Center" />
+                                        <CheckBox IsChecked="{Binding IsSelected}"
+                                            Content="Track Playlist"
+                                            HorizontalAlignment="Center" />
+                                    </StackPanel>
+                                </DataTemplate>
+                            </ItemsControl.DataTemplates>
+                        </ItemsControl>
+                    </ScrollViewer>
+                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Center"
+                        Margin="0 10 0 10">
+                        <Button Command="{Binding SavePlaylistSelectionCommand}"
+                            Content="Save Changes" />
+                        <Button Command="{Binding CancelPlaylistSelectionCommand}"
+                            Content="Cancel"
+                            Margin="10 0 0 0" />
+                        <Button IsVisible="{Binding IsInitialSetupComplete}"
+                            Command="{Binding ShowSyncedPlaylistViewCommand}"
+                            Content="Back" Margin="10 0 0 0" />
+                    </StackPanel>
+                </StackPanel>
+            </StackPanel>
+        </Panel>
+
+        <!-- Potentially Deleted Tracks Panel -->
+        <Panel IsVisible="{Binding ShowPotentiallyDeletedTracks}">
+            <StackPanel VerticalAlignment="Center">
+                <TextBlock Text="Tracks No Longer Available" FontSize="34" FontWeight="Bold"
+                    HorizontalAlignment="Center" Margin="0 14 0 7" />
+                <TextBlock
+                    Text="These tracks were in your playlists but are no longer on SoundCloud."
+                    TextWrapping="Wrap" MaxWidth="700"
+                    HorizontalAlignment="Center" Margin="0 0 0 14" />
+                <ScrollViewer VerticalScrollBarVisibility="Auto"
+                    MaxHeight="700">
+                    <ItemsControl ItemsSource="{Binding PotentiallyDeletedTracks}">
+                        <ItemsControl.ItemsPanel>
+                            <ItemsPanelTemplate>
+                                <WrapPanel Orientation="Horizontal"
                                     HorizontalAlignment="Center" />
-                                <TextBlock Text="{Binding Permalink, StringFormat='/{0}'}"
-                                    FontStyle="Italic"
-                                    HorizontalAlignment="Center" />
-                                <CheckBox IsChecked="{Binding IsSelected}"
-                                    Content="Track Playlist"
-                                    HorizontalAlignment="Center" />
-                            </StackPanel>
-                        </DataTemplate>
-                    </ItemsControl.DataTemplates>
-                </ItemsControl>
-                <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Margin="0 10 0 0">
-                    <Button Command="{Binding SavePlaylistSelectionCommand}"
-                        Content="Save Changes" />
-                    <Button Command="{Binding CancelPlaylistSelectionCommand}"
-                        Content="Cancel"
-                        Margin="10 0 0 0" />
-                    <Button IsVisible="{Binding IsInitialSetupComplete}"
-                        Command="{Binding ShowSyncedPlaylistViewCommand}"
-                        Content="Back" Margin="10 0 0 0" />
+                            </ItemsPanelTemplate>
+                        </ItemsControl.ItemsPanel>
+                        <ItemsControl.DataTemplates>
+                            <DataTemplate x:DataType="vm:PotentiallyDeletedTrackViewModel">
+                                <Border Width="364" Margin="14" Padding="14">
+                                    <Grid RowDefinitions="Auto,Auto,*,Auto" RowSpacing="11">
+                                        <Image Grid.Row="0"
+                                            Source="{Binding ArtworkBitmap}"
+                                            Width="280" Height="280"
+                                            HorizontalAlignment="Center"
+                                            Stretch="Uniform" />
+
+                                        <StackPanel Grid.Row="1"
+                                            HorizontalAlignment="Center">
+                                            <TextBlock
+                                                Text="{Binding Title}"
+                                                FontSize="20"
+                                                FontWeight="Bold"
+                                                TextWrapping="Wrap"
+                                                MaxWidth="308"
+                                                HorizontalAlignment="Center" />
+                                            <TextBlock
+                                                Text="{Binding Artist}"
+                                                FontSize="14"
+                                                TextWrapping="Wrap"
+                                                MaxWidth="308"
+                                                HorizontalAlignment="Center" />
+                                        </StackPanel>
+
+                                        <ScrollViewer Grid.Row="2"
+                                            Height="224"
+                                            VerticalScrollBarVisibility="Auto">
+                                            <ItemsControl ItemsSource="{Binding Playlists}">
+                                                <ItemsControl.ItemsPanel>
+                                                    <ItemsPanelTemplate>
+                                                        <WrapPanel HorizontalAlignment="Center"
+                                                            ItemWidth="168" />
+                                                    </ItemsPanelTemplate>
+                                                </ItemsControl.ItemsPanel>
+                                                <ItemsControl.DataTemplates>
+                                                    <DataTemplate
+                                                        x:DataType="models:PotentiallyDeletedPlaylistItem">
+                                                        <CheckBox
+                                                            IsChecked="{Binding KeepInPlaylist}"
+                                                            HorizontalAlignment="Center"
+                                                            HorizontalContentAlignment="Center"
+                                                            Margin="8 6">
+                                                            <TextBlock
+                                                                Text="{Binding PlaylistTitle}"
+                                                                TextAlignment="Center"
+                                                                TextWrapping="NoWrap"
+                                                                TextTrimming="CharacterEllipsis"
+                                                                MaxWidth="126" />
+                                                        </CheckBox>
+                                                    </DataTemplate>
+                                                </ItemsControl.DataTemplates>
+                                            </ItemsControl>
+                                        </ScrollViewer>
+
+                                        <StackPanel Grid.Row="3"
+                                            Orientation="Horizontal"
+                                            HorizontalAlignment="Center">
+                                            <Button Command="{Binding KeepInAllCommand}"
+                                                Content="Keep in All" />
+                                            <Button Command="{Binding KeepInNoneCommand}"
+                                                Content="Keep in None"
+                                                Margin="7 0 0 0" />
+                                        </StackPanel>
+                                    </Grid>
+                                </Border>
+                            </DataTemplate>
+                        </ItemsControl.DataTemplates>
+                    </ItemsControl>
+                </ScrollViewer>
+                <StackPanel Orientation="Horizontal" HorizontalAlignment="Center"
+                    Margin="0 14 0 14">
+                    <Button Command="{Binding KeepAllTracksCommand}"
+                        Content="Keep All Tracks" />
+                    <Button Command="{Binding DeleteAllTracksCommand}"
+                        Content="Delete All Tracks"
+                        Margin="14 0 0 0" />
+                    <Button Command="{Binding ContinueFromPotentiallyDeletedTracksCommand}"
+                        Content="Continue"
+                        Margin="14 0 0 0" />
                 </StackPanel>
             </StackPanel>
         </Panel>
@@ -71,30 +204,39 @@
             HorizontalAlignment="Center" VerticalAlignment="Center">
             <StackPanel>
                 <TextBlock Text="Tracked Playlists" FontSize="24" FontWeight="Bold"
-                    HorizontalAlignment="Center" />
-                <ItemsControl ItemsSource="{Binding TrackedPlaylists}">
-                    <ItemsControl.ItemsPanel>
-                        <ItemsPanelTemplate>
-                            <WrapPanel Orientation="Horizontal" />
-                        </ItemsPanelTemplate>
-                    </ItemsControl.ItemsPanel>
-                    <ItemsControl.DataTemplates>
-                        <DataTemplate x:DataType="vm:PlaylistViewModel">
-                            <StackPanel Margin="10" HorizontalAlignment="Center"
-                                VerticalAlignment="Center">
-                                <Image Source="{Binding ArtworkBitmap}" Width="200" Height="200"
-                                    Stretch="Uniform" />
-                                <TextBlock Text="{Binding Title}"
-                                    FontSize="14" FontWeight="Bold"
+                    HorizontalAlignment="Center" Margin="0 10 0 10" />
+                <ScrollViewer VerticalScrollBarVisibility="Auto"
+                    MaxHeight="500">
+                    <ItemsControl ItemsSource="{Binding TrackedPlaylists}">
+                        <ItemsControl.ItemsPanel>
+                            <ItemsPanelTemplate>
+                                <WrapPanel Orientation="Horizontal"
                                     HorizontalAlignment="Center" />
-                                <TextBlock Text="{Binding Permalink, StringFormat='/{0}'}"
-                                    FontStyle="Italic"
-                                    HorizontalAlignment="Center" />
-                            </StackPanel>
-                        </DataTemplate>
-                    </ItemsControl.DataTemplates>
-                </ItemsControl>
-                <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Margin="0 10 0 0">
+                            </ItemsPanelTemplate>
+                        </ItemsControl.ItemsPanel>
+                        <ItemsControl.DataTemplates>
+                            <DataTemplate x:DataType="vm:PlaylistViewModel">
+                                <StackPanel Width="240" Margin="10"
+                                    HorizontalAlignment="Center"
+                                    VerticalAlignment="Top">
+                                    <Image Source="{Binding ArtworkBitmap}"
+                                        Width="200" Height="200"
+                                        Stretch="Uniform" />
+                                    <TextBlock Text="{Binding Title}"
+                                        FontSize="14" FontWeight="Bold"
+                                        TextWrapping="Wrap" MaxWidth="220"
+                                        HorizontalAlignment="Center" />
+                                    <TextBlock Text="{Binding Permalink, StringFormat='/{0}'}"
+                                        FontStyle="Italic"
+                                        TextWrapping="Wrap" MaxWidth="220"
+                                        HorizontalAlignment="Center" />
+                                </StackPanel>
+                            </DataTemplate>
+                        </ItemsControl.DataTemplates>
+                    </ItemsControl>
+                </ScrollViewer>
+                <StackPanel Orientation="Horizontal" HorizontalAlignment="Center"
+                    Margin="0 10 0 10">
                     <Button Command="{Binding SyncNowCommand}"
                         Content="Sync Now" />
                     <Button Command="{Binding ShowPlaylistSelectionCommand}"

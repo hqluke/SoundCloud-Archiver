@@ -2,7 +2,6 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
-using System.Net.Http;
 using System.Threading.Tasks;
 using Avalonia.Controls;
 using Avalonia.Media.Imaging;
@@ -37,6 +36,7 @@ public partial class MainWindow : Window
     private readonly string _manifestPath = "manifest.json";
 
     private TaskCompletionSource<bool> _playlistSelectionComplete = new();
+    private TaskCompletionSource<bool> _potentiallyDeletedTracksComplete = new();
 
     public MainWindow()
     {
@@ -69,14 +69,13 @@ public partial class MainWindow : Window
             vm.OnCreateSyncedPlaylists += OnCreateSyncedPlaylists;
             vm.OnShowPlaylistSelection += OnShowPlaylistSelection;
             vm.OnShowSyncedPlaylistView += OnShowSyncedPlaylistView;
+            vm.OnPotentiallyDeletedTracksContinue += OnPotentiallyDeletedTracksContinue;
             DataContextChanged -= OnDataContextChanged;
         }
     }
 
     private async Task InitializeAsync()
     {
-        using var http = new HttpClient();
-
         var tempClient = new SoundCloudClient();
         var clientId = await tempClient.GetClientIdAsync();
         _soundcloud = new SoundCloudClient(clientId);
@@ -84,7 +83,7 @@ public partial class MainWindow : Window
 
         _manifest = ManifestStore.Load(_manifestPath, _likedTracksPath);
 
-        _artwork = new ArtworkService(http, _artworkPath);
+        _artwork = new ArtworkService(_artworkPath);
         _syncService = new SyncService(_soundcloud, _profileUrl, _tracksPath, _artwork);
         _folderService = new FolderService(_archivePath, _likedTracksPath);
 
@@ -98,9 +97,12 @@ public partial class MainWindow : Window
         }
         else
         {
-            await PopulateTrackedPlaylists();
             _IsLikedPlaylistSelected =
-                _manifest.TrackedPlaylists[LikedPlaylistId].TrackIds.Count > 0;
+                _manifest.TrackedPlaylists.TryGetValue(LikedPlaylistId, out var liked)
+                && liked.TrackIds.Count > 0;
+            await PopulateTrackedPlaylists();
+            var vm = (MainWindowViewModel)DataContext!;
+            vm.ShowTracksSyncing = true;
             await SyncTracksAsync();
         }
     }
@@ -112,6 +114,9 @@ public partial class MainWindow : Window
 
         foreach (var (id, tracked) in _manifest.TrackedPlaylists)
         {
+            if (id == LikedPlaylistId && !_IsLikedPlaylistSelected)
+                continue;
+
             var item = new PlaylistViewModel(tracked);
             if (File.Exists(tracked.ArtworkPath))
                 item.ArtworkBitmap = new Bitmap(tracked.ArtworkPath);
@@ -137,12 +142,14 @@ public partial class MainWindow : Window
             foreach (var item in vm.AllPlaylists)
             {
                 item.IsSelected = item.IsLiked
-                    ? _manifest.TrackedPlaylists[LikedPlaylistId].TrackIds.Count > 0
+                    ? _IsLikedPlaylistSelected
                     : _manifest.TrackedPlaylists.ContainsKey(item.Id);
             }
             vm.IsPlaylistSelectionVisible = true;
             return;
         }
+
+        vm.IsLoadingPlaylists = true;
 
         try
         {
@@ -156,7 +163,7 @@ public partial class MainWindow : Window
                 allPlaylists.Add(playlist);
                 Console.WriteLine($"Fetched playlist: {playlist.Title} (ID: {playlist.Id})");
             }
-            allPlaylists.Add(new Playlist { Title = "Liked_Songs", Permalink = "liked" });
+            allPlaylists.Add(new Playlist { Title = "Liked Songs", Permalink = "liked" });
 
             Console.WriteLine($"Total playlists fetched: {allPlaylists.Count}");
 
@@ -165,7 +172,7 @@ public partial class MainWindow : Window
             {
                 var item = new PlaylistViewModel(playlist);
                 item.IsSelected = item.IsLiked
-                    ? _manifest.TrackedPlaylists[LikedPlaylistId].TrackIds.Count > 0
+                    ? _IsLikedPlaylistSelected
                     : _manifest.TrackedPlaylists.ContainsKey(item.Id);
 
                 var artworkPath = await _artwork!.FetchAndSaveArtwork(
@@ -182,6 +189,10 @@ public partial class MainWindow : Window
         {
             Console.WriteLine($"Error in ShowPlaylistSelectionAsync: {ex.Message}");
         }
+        finally
+        {
+            vm.IsLoadingPlaylists = false;
+        }
     }
 
     private async Task<bool> OnSavePlaylistSelection()
@@ -195,7 +206,8 @@ public partial class MainWindow : Window
         foreach (var item in vm.AllPlaylists)
         {
             var tracked = item.IsLiked
-                ? _manifest.TrackedPlaylists[LikedPlaylistId].TrackIds.Count > 0
+                ? _manifest.TrackedPlaylists.TryGetValue(LikedPlaylistId, out var liked)
+                    && liked.TrackIds.Count > 0
                 : _manifest.TrackedPlaylists.ContainsKey(item.Id);
             if (item.IsSelected && !tracked)
                 toTrack.Add(item);
@@ -228,7 +240,7 @@ public partial class MainWindow : Window
 
         message += "\nDo you want to proceed?";
 
-        var dialog = new ConfirmationDialog(message);
+        var dialog = new ConfirmationDialog("Playlist Sync", message);
         var result = await dialog.ShowDialog<bool>(this);
 
         if (!result)
@@ -247,6 +259,7 @@ public partial class MainWindow : Window
                     Permalink = item.Permalink,
                     Title = item.Title,
                     PermalinkUrl = "",
+                    ArtworkPath = _artwork!.FallbackFilePath,
                     FolderPath = _likedTracksPath,
                 };
                 continue;
@@ -275,19 +288,48 @@ public partial class MainWindow : Window
         {
             item.IsTracked = false;
 
+            var playlistId = item.IsLiked ? LikedPlaylistId : item.Id;
+            var playlistPath = item.IsLiked
+                ? _likedTracksPath
+                : _manifest.TrackedPlaylists[item.Id].FolderPath;
+
             if (item.IsLiked)
-            {
                 _IsLikedPlaylistSelected = false;
-                _manifest.TrackedPlaylists[LikedPlaylistId].TrackIds.Clear();
-                continue;
+
+            var tracksInPlaylist = _manifest
+                .Tracks.Values.Where(t => t.InPlaylists.Contains(playlistId))
+                .ToList();
+
+            // Remove symlinks, tracks from playlists, and vice versa
+            // If there are no remaining playlists, delete the track and its artwork
+            foreach (var track in tracksInPlaylist)
+            {
+                Console.WriteLine($"Untracking: removing {track.Title} from playlist {playlistId}");
+                await _syncService!.RemoveSymlinks(track.FileName, playlistPath);
+                await _syncService.RemoveTracksFromPlaylists(track.Id, playlistId, _manifest);
+                await _syncService.RemovePlaylistsFromTracks(track.Id, playlistId, _manifest);
+
+                if (track.InPlaylists.Count == 0)
+                {
+                    Console.WriteLine(
+                        $"  Track {track.Title} has no remaining playlists — deleting files"
+                    );
+                    await _syncService.DeleteTrackAndArtwork(track.FilePath, track.ArtworkPath);
+                    await _syncService.DeleteTrackFromManifest(track.Id, _manifest);
+                }
             }
 
-            _manifest.TrackedPlaylists.Remove(item.Id);
-            foreach (var track in _manifest.Tracks.Values)
+            var emptyEntries = new List<long>();
+            foreach (var (trackId, playlists) in _manifest.PotentiallyDeletedTracks)
             {
-                if (track.InPlaylists.Contains(item.Id))
-                    track.InPlaylists.Remove(item.Id);
+                playlists.Remove(playlistId);
+                if (playlists.Count == 0)
+                    emptyEntries.Add(trackId);
             }
+            foreach (var trackId in emptyEntries)
+                _manifest.PotentiallyDeletedTracks.Remove(trackId);
+
+            _manifest.TrackedPlaylists.Remove(playlistId);
         }
 
         await RebuildTrackedPlaylists();
@@ -312,6 +354,9 @@ public partial class MainWindow : Window
 
         foreach (var (id, tracked) in _manifest.TrackedPlaylists)
         {
+            if (id == LikedPlaylistId && !_IsLikedPlaylistSelected)
+                continue;
+
             var item = new PlaylistViewModel(tracked);
 
             if (_IsLikedPlaylistSelected && id == LikedPlaylistId)
@@ -331,7 +376,7 @@ public partial class MainWindow : Window
         foreach (var playlist in vm.AllPlaylists)
         {
             if (playlist.IsLiked)
-                playlist.IsTracked = _manifest.TrackedPlaylists[LikedPlaylistId].TrackIds.Count > 0;
+                playlist.IsTracked = _IsLikedPlaylistSelected;
             else
                 playlist.IsTracked = _manifest.TrackedPlaylists.ContainsKey(playlist.Id);
         }
@@ -347,7 +392,7 @@ public partial class MainWindow : Window
                 item.IsSelected = false;
             else
                 item.IsSelected = item.IsLiked
-                    ? _manifest.TrackedPlaylists[LikedPlaylistId].TrackIds.Count > 0
+                    ? _IsLikedPlaylistSelected
                     : _manifest.TrackedPlaylists.ContainsKey(item.Id);
         }
         vm.IsPlaylistSelectionVisible = true;
@@ -363,12 +408,200 @@ public partial class MainWindow : Window
         await RebuildTrackedPlaylists();
     }
 
-    private void PlaylistSeclectionCompleted(object? sender, EventArgs e)
+    private async void PlaylistSeclectionCompleted(object? sender, EventArgs e)
     {
+        var empty = _manifest.PotentiallyDeletedTracks
+            .Where(e => e.Value.Count == 0).Select(e => e.Key).ToList();
+        foreach (var key in empty)
+            _manifest.PotentiallyDeletedTracks.Remove(key);
+
         var vm = (MainWindowViewModel)DataContext!;
         vm.ShowTracksSyncing = false;
-        vm.ShowSyncedPlaylists = true;
         vm.IsInitialSetupComplete = true;
+        if (_manifest.PotentiallyDeletedTracks.Count > 0)
+        {
+            await CreatePotentiallyDeletedTracks();
+            vm.ShowPotentiallyDeletedTracks = true;
+            _potentiallyDeletedTracksComplete = new TaskCompletionSource<bool>();
+            bool complete = await _potentiallyDeletedTracksComplete.Task;
+            if (complete)
+                vm.ShowSyncedPlaylists = true;
+        }
+        else
+            vm.ShowSyncedPlaylists = true;
+    }
+
+    private async Task CreatePotentiallyDeletedTracks()
+    {
+        Console.WriteLine("Creating Potentially Deleted Tracks");
+        var vm = (MainWindowViewModel)DataContext!;
+        vm.PotentiallyDeletedTracks.Clear();
+        // trackId key hashset of playlist ids as value
+        foreach (var (trackId, playlists) in _manifest.PotentiallyDeletedTracks)
+        {
+            var trackIdString = trackId.ToString();
+            var artist = _manifest.Tracks[trackIdString].Artist;
+            var trackPath = _manifest.Tracks[trackIdString].FilePath;
+            var trackFileName = _manifest.Tracks[trackIdString].FileName;
+            var ListOfPlaylists = new PotentiallyDeletedTrackViewModel()
+            {
+                TrackId = trackId,
+                Title = _manifest.Tracks[trackIdString].Title,
+                TrackFilePath = trackPath,
+                TrackFileName = trackFileName,
+                Artist = artist,
+                IsKept = false,
+            };
+
+            if (File.Exists(_manifest.Tracks[trackIdString].ArtworkPath))
+                ListOfPlaylists.ArtworkBitmap = new Bitmap(
+                    _manifest.Tracks[trackIdString].ArtworkPath
+                );
+            else
+                ListOfPlaylists.ArtworkBitmap = await _artwork!.FetchBitmap(null);
+
+            ListOfPlaylists.ArtworkPath = _manifest.Tracks[trackIdString].ArtworkPath;
+
+            foreach (var playlistId in playlists)
+            {
+                string playlistTitle = _manifest.TrackedPlaylists[playlistId].Title;
+                string playlistPath = _manifest.TrackedPlaylists[playlistId].FolderPath;
+                var PotentiallyDeletedFromPlaylist = new PotentiallyDeletedPlaylistItem
+                {
+                    PlaylistId = playlistId,
+                    PlaylistTitle = playlistTitle,
+                    PlaylistPath = playlistPath,
+                    KeepInPlaylist = false,
+                };
+                ListOfPlaylists.Playlists.Add(PotentiallyDeletedFromPlaylist);
+            }
+            vm.PotentiallyDeletedTracks.Add(ListOfPlaylists);
+        }
+    }
+
+    private async Task<bool> OnPotentiallyDeletedTracksContinue()
+    {
+        Console.WriteLine("Continuing Potentially Deleted Tracks");
+        var vm = (MainWindowViewModel)DataContext!;
+
+        // Clear deleted playlists
+        foreach (var item in vm.PotentiallyDeletedTracks)
+            item.DeleteFromPlaylists.Clear();
+
+        string message = "";
+        string deletedTrackMessage = "Deleted tracks";
+        string messageBody = "";
+        var deletedTracks = new List<string>();
+        var deletedTracksFromManifest = new HashSet<long>();
+
+        foreach (var item in vm.PotentiallyDeletedTracks)
+        {
+            string trackTitle = $"{item.Title}";
+            string trackInfoMessage = "\n\n";
+            string keptInPlaylistsMessage = "Kept in playlists:";
+            string removedFromPlaylistsMessage = "Deleted from playlists:";
+
+            foreach (var playlist in item.Playlists)
+            {
+                if (playlist.KeepInPlaylist)
+                {
+                    keptInPlaylistsMessage += $"\n  \u2022 {playlist.PlaylistTitle}";
+                }
+                else
+                {
+                    item.DeleteFromPlaylists.Add(
+                        playlist.PlaylistId.ToString(),
+                        playlist.PlaylistPath
+                    );
+                    removedFromPlaylistsMessage += $"\n  \u2022 {playlist.PlaylistTitle}";
+                }
+            }
+
+            // Check if track still belongs to any playlists
+            var trackIdStr = item.TrackId.ToString();
+            if (!_manifest.Tracks.TryGetValue(trackIdStr, out var manifestEntry))
+                continue;
+
+            var remainingPlaylists = manifestEntry
+                .InPlaylists.Where(pId => !item.DeleteFromPlaylists.ContainsKey(pId.ToString()))
+                .ToList();
+
+            if (remainingPlaylists.Count == 0)
+            {
+                deletedTracksFromManifest.Add(item.TrackId);
+                item.IsKept = false;
+                deletedTracks.Add(trackTitle);
+            }
+            else
+            {
+                item.IsKept = true;
+                // Track won't get marked as potentially deleted next sync
+                manifestEntry.IsKept = true;
+                trackInfoMessage += $"______{trackTitle}______";
+                trackInfoMessage += $"\n{keptInPlaylistsMessage}";
+                trackInfoMessage += $"\n{removedFromPlaylistsMessage}";
+                messageBody += $"{trackInfoMessage}";
+            }
+        }
+
+        if (deletedTracks.Count > 0)
+        {
+            message += $"{deletedTrackMessage}:\n";
+            foreach (var title in deletedTracks)
+                message += $"  \u2022 {title}\n";
+            message += messageBody;
+        }
+        else
+        {
+            message += messageBody;
+        }
+
+        Console.WriteLine("Showing confirmation dialog");
+        var dialog = new ConfirmationDialog("Track Updates", message);
+        var result = await dialog.ShowDialog<bool>(this);
+        Console.WriteLine("\nConfirmation dialog closed");
+
+        if (!result)
+            return false;
+
+        Console.WriteLine("Handling Kept tracks");
+        foreach (var item in vm.PotentiallyDeletedTracks.Where(i => i.IsKept))
+        {
+            await _syncService!.RemoveSymlinks(item);
+            await _syncService!.RemoveTracksFromPlaylistsAndPlaylistsFromTracks(item, _manifest);
+
+            // Clean up PotentiallyDeletedTracks in manifest
+            foreach (var playlistIdStr in item.DeleteFromPlaylists.Keys)
+            {
+                var playlistId = long.Parse(playlistIdStr);
+                if (_manifest.PotentiallyDeletedTracks.TryGetValue(item.TrackId, out var playlists))
+                {
+                    playlists.Remove(playlistId);
+                    if (playlists.Count == 0)
+                        _manifest.PotentiallyDeletedTracks.Remove(item.TrackId);
+                }
+            }
+        }
+
+        Console.WriteLine("Handling Deleted tracks");
+        var toDelete = vm.PotentiallyDeletedTracks.Where(i => !i.IsKept).ToList();
+        foreach (var item in toDelete)
+        {
+            await _syncService!.RemoveSymlinks(item);
+            await _syncService!.RemoveTracksFromPlaylists(item, _manifest);
+        }
+
+        if (toDelete.Count > 0)
+        {
+            await _syncService!.DeleteTrackAndArtwork(vm.PotentiallyDeletedTracks);
+            await _syncService!.DeleteTracksFromManifest(deletedTracksFromManifest, _manifest);
+        }
+
+        ManifestStore.Save(_manifest, _manifestPath);
+
+        vm.ShowPotentiallyDeletedTracks = false;
+        _potentiallyDeletedTracksComplete.TrySetResult(true);
+        return true;
     }
 
     private async Task OnSyncNow()
@@ -376,7 +609,9 @@ public partial class MainWindow : Window
         var vm = (MainWindowViewModel)DataContext!;
         vm.ShowSyncedPlaylists = false;
         vm.ShowTracksSyncing = true;
-        _IsLikedPlaylistSelected = _manifest.TrackedPlaylists[LikedPlaylistId].TrackIds.Count > 0;
+        _IsLikedPlaylistSelected =
+            _manifest.TrackedPlaylists.TryGetValue(LikedPlaylistId, out var liked)
+            && liked.TrackIds.Count > 0;
         await SyncTracksAsync();
     }
 
@@ -391,14 +626,12 @@ public partial class MainWindow : Window
 
     private async Task OnShowPlaylistSelection()
     {
-        using var http = new HttpClient();
         var vm = (MainWindowViewModel)DataContext!;
         vm.ShowSyncedPlaylists = false;
         vm.ShowTracksSyncing = false;
         _playlistSelectionComplete = new TaskCompletionSource<bool>();
 
-        // recreate artwork service with new http client for this session
-        _artwork = new ArtworkService(http, _artworkPath);
+        _artwork = new ArtworkService(_artworkPath);
 
         await ShowPlaylistSelectionAsync();
         var saved = await _playlistSelectionComplete.Task;
@@ -418,11 +651,12 @@ public partial class MainWindow : Window
                 _manifestPath,
                 tracked,
                 // have SyncPlaylistAsync set the CurrentTrack and ArtworkBitmap properties every time it finishes handling a track
-                (track, bitmap) =>
+                (track, bitmap, artist) =>
                 {
                     var vm = (MainWindowViewModel)DataContext!;
                     vm.CurrentTrack = track;
                     vm.ArtworkBitmap = bitmap;
+                    vm.CurrentArtist = artist;
                 }
             );
         }

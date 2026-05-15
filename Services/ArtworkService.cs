@@ -10,14 +10,16 @@ public class ArtworkService
 {
     private readonly HttpClient _http;
     private readonly string _artworkPath;
-    private static readonly Uri FallbackArtwork = new(
+    private static readonly Uri FallbackUrl = new(
         "https://i1.sndcdn.com/avatars-4oLYo9NB9XBQQ11s-2Kdzzg-t500x500.jpg"
     );
     private Bitmap? _fallbackBitmap;
 
-    public ArtworkService(HttpClient http, string artworkPath)
+    public string FallbackFilePath => Path.Combine(_artworkPath, "_fallback.jpg");
+
+    public ArtworkService(string artworkPath)
     {
-        _http = http;
+        _http = new HttpClient();
         _artworkPath = artworkPath;
     }
 
@@ -29,15 +31,21 @@ public class ArtworkService
         if (File.Exists(artworkPath))
             return artworkPath;
 
+        if (url == null)
+        {
+            await EnsureFallbackFile();
+            return FallbackFilePath;
+        }
+
         try
         {
-            var bytes = await _http.GetByteArrayAsync(url ?? FallbackArtwork);
+            var bytes = await _http.GetByteArrayAsync(url);
             await File.WriteAllBytesAsync(artworkPath, bytes);
         }
         catch (HttpRequestException)
         {
-            var bytes = await _http.GetByteArrayAsync(FallbackArtwork);
-            await File.WriteAllBytesAsync(artworkPath, bytes);
+            await EnsureFallbackFile();
+            return FallbackFilePath;
         }
 
         return artworkPath;
@@ -47,13 +55,38 @@ public class ArtworkService
     {
         try
         {
-            var bytes = await _http.GetByteArrayAsync(url ?? FallbackArtwork);
+            var bytes = await _http.GetByteArrayAsync(url ?? FallbackUrl);
             return new Bitmap(new MemoryStream(bytes));
         }
         catch (HttpRequestException)
         {
-            _fallbackBitmap ??= await FetchBitmap(FallbackArtwork);
+            _fallbackBitmap ??= await LoadOrFetchFallbackBitmap();
             return _fallbackBitmap;
+        }
+    }
+
+    private async Task EnsureFallbackFile()
+    {
+        if (!File.Exists(FallbackFilePath))
+        {
+            var bytes = await _http.GetByteArrayAsync(FallbackUrl);
+            await File.WriteAllBytesAsync(FallbackFilePath, bytes);
+        }
+    }
+
+    private async Task<Bitmap?> LoadOrFetchFallbackBitmap()
+    {
+        if (File.Exists(FallbackFilePath))
+            return new Bitmap(FallbackFilePath);
+
+        try
+        {
+            await EnsureFallbackFile();
+            return new Bitmap(FallbackFilePath);
+        }
+        catch
+        {
+            return null;
         }
     }
 
