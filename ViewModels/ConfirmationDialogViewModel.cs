@@ -12,6 +12,15 @@ public partial class ConfirmationDialogViewModel : ViewModelBase
     [ObservableProperty]
     private string _message = "";
 
+    [ObservableProperty]
+    private bool _showCheckbox;
+
+    [ObservableProperty]
+    private string _checkboxLabel = "";
+
+    [ObservableProperty]
+    private bool _isChecked;
+
     public TaskCompletionSource<bool>? Result { get; set; }
 
     [RelayCommand]

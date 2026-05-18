@@ -1,9 +1,12 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Text.Json;
 using System.Threading.Tasks;
 using Avalonia.Controls;
+using Avalonia.Input;
 using Avalonia.Media.Imaging;
 using Microsoft.Extensions.Configuration;
 using soundCloudArchiver.Models;
@@ -49,9 +52,6 @@ public partial class MainWindow : Window
         _profileUrl = config["SoundCloud:ProfileUrl"]!;
         _archivePath = config["Archiver:DownloadPath"]!;
 
-        if (!Directory.Exists(_archivePath))
-            Directory.CreateDirectory(_archivePath);
-
         InitializeComponent();
 
         DataContextChanged += OnDataContextChanged;
@@ -70,6 +70,11 @@ public partial class MainWindow : Window
             vm.OnShowPlaylistSelection += OnShowPlaylistSelection;
             vm.OnShowSyncedPlaylistView += OnShowSyncedPlaylistView;
             vm.OnPotentiallyDeletedTracksContinue += OnPotentiallyDeletedTracksContinue;
+            vm.OnSaveSetup += OnSaveSetup;
+            vm.OnShowSetup += OnShowSetup;
+            vm.OnShowManageTrackPlaylists += OnShowManageTrackPlaylists;
+            vm.OnSaveManageTrackPlaylists += OnSaveManageTrackPlaylists;
+            vm.OnCancelManageTrackPlaylists += OnCancelManageTrackPlaylists;
             DataContextChanged -= OnDataContextChanged;
         }
     }
@@ -89,11 +94,8 @@ public partial class MainWindow : Window
 
         if (!_manifest.AppState.IsInitialSetupComplete)
         {
-            _playlistSelectionComplete = new TaskCompletionSource<bool>();
-            await ShowPlaylistSelectionAsync();
-            var saved = await _playlistSelectionComplete.Task;
-            if (saved)
-                await SyncTracksAsync();
+            var vm = (MainWindowViewModel)DataContext!;
+            vm.ShowSetup = true;
         }
         else
         {
@@ -410,8 +412,10 @@ public partial class MainWindow : Window
 
     private async void PlaylistSeclectionCompleted(object? sender, EventArgs e)
     {
-        var empty = _manifest.PotentiallyDeletedTracks
-            .Where(e => e.Value.Count == 0).Select(e => e.Key).ToList();
+        var empty = _manifest
+            .PotentiallyDeletedTracks.Where(e => e.Value.Count == 0)
+            .Select(e => e.Key)
+            .ToList();
         foreach (var key in empty)
             _manifest.PotentiallyDeletedTracks.Remove(key);
 
@@ -461,6 +465,11 @@ public partial class MainWindow : Window
                 ListOfPlaylists.ArtworkBitmap = await _artwork!.FetchBitmap(null);
 
             ListOfPlaylists.ArtworkPath = _manifest.Tracks[trackIdString].ArtworkPath;
+
+            // Check if track was removed from ALL its SoundCloud playlists
+            var trackEntry = _manifest.Tracks[trackIdString];
+            ListOfPlaylists.IsRemovedFromSoundCloud = trackEntry
+                .InPlaylists.All(pId => playlists.Contains(pId));
 
             foreach (var playlistId in playlists)
             {
@@ -526,6 +535,11 @@ public partial class MainWindow : Window
                 .InPlaylists.Where(pId => !item.DeleteFromPlaylists.ContainsKey(pId.ToString()))
                 .ToList();
 
+            // Determine if the track was removed from ALL its SoundCloud playlists
+            var potDeletedPlaylistIds = item.Playlists.Select(p => p.PlaylistId).ToHashSet();
+            var wasRemovedFromAllPlaylists = manifestEntry
+                .InPlaylists.All(pId => potDeletedPlaylistIds.Contains(pId));
+
             if (remainingPlaylists.Count == 0)
             {
                 deletedTracksFromManifest.Add(item.TrackId);
@@ -534,9 +548,11 @@ public partial class MainWindow : Window
             }
             else
             {
-                item.IsKept = true;
-                // Track won't get marked as potentially deleted next sync
-                manifestEntry.IsKept = true;
+                if (wasRemovedFromAllPlaylists)
+                {
+                    item.IsKept = true;
+                    manifestEntry.IsKept = true;
+                }
                 trackInfoMessage += $"______{trackTitle}______";
                 trackInfoMessage += $"\n{keptInPlaylistsMessage}";
                 trackInfoMessage += $"\n{removedFromPlaylistsMessage}";
@@ -662,5 +678,492 @@ public partial class MainWindow : Window
         }
 
         PlaylistSeclectionCompleted(this, EventArgs.Empty);
+    }
+
+    private void OnManageTrackSearchKeyDown(object? sender, KeyEventArgs e)
+    {
+        if (e.Key == Key.Enter)
+        {
+            var vm = (MainWindowViewModel)DataContext!;
+            vm.SearchManageTracksCommand.Execute(null);
+        }
+    }
+
+    private async Task OnShowManageTrackPlaylists()
+    {
+        Console.WriteLine("Showing Manage Out of Sync Tracks");
+        var vm = (MainWindowViewModel)DataContext!;
+
+        vm.AllManageableTracks.Clear();
+        vm.ManageableTracks.Clear();
+
+        foreach (var (idStr, track) in _manifest.Tracks)
+        {
+            if (!track.IsKept)
+                continue;
+
+            var item = new ManageOutOfSyncTracksViewModel
+            {
+                TrackId = track.Id,
+                Title = track.Title,
+                TrackFilePath = track.FilePath,
+                TrackFileName = track.FileName,
+                Artist = track.Artist,
+                ArtworkPath = track.ArtworkPath,
+                IsKept = track.IsKept,
+                OriginalPlaylistIds = new HashSet<long>(track.InPlaylists),
+            };
+
+            if (File.Exists(track.ArtworkPath))
+                item.ArtworkBitmap = new Bitmap(track.ArtworkPath);
+            else
+                item.ArtworkBitmap = await _artwork!.FetchBitmap(null);
+
+            foreach (var (playlistId, trackedPlaylist) in _manifest.TrackedPlaylists)
+            {
+                var playlistItem = new PotentiallyDeletedPlaylistItem
+                {
+                    PlaylistId = playlistId,
+                    PlaylistTitle = trackedPlaylist.Title,
+                    PlaylistPath = trackedPlaylist.FolderPath,
+                    KeepInPlaylist = track.InPlaylists.Contains(playlistId),
+                };
+                item.Playlists.Add(playlistItem);
+            }
+
+            vm.AllManageableTracks.Add(item);
+            vm.ManageableTracks.Add(item);
+        }
+
+        vm.ShowManageTrackPlaylists = true;
+        vm.ShowSyncedPlaylists = false;
+    }
+
+    private async Task<bool> OnSaveManageTrackPlaylists()
+    {
+        Console.WriteLine("Saving managed track playlists");
+        var vm = (MainWindowViewModel)DataContext!;
+
+        string message = "";
+        var willBeDeleted = new List<string>();
+
+        foreach (var item in vm.AllManageableTracks)
+        {
+            var trackIdStr = item.TrackId.ToString();
+            if (!_manifest.Tracks.TryGetValue(trackIdStr, out var manifestEntry))
+                continue;
+
+            var added = new List<PotentiallyDeletedPlaylistItem>();
+            var removed = new List<PotentiallyDeletedPlaylistItem>();
+
+            foreach (var playlist in item.Playlists)
+            {
+                var wasInPlaylist = item.OriginalPlaylistIds.Contains(playlist.PlaylistId);
+                if (playlist.KeepInPlaylist && !wasInPlaylist)
+                    added.Add(playlist);
+                else if (!playlist.KeepInPlaylist && wasInPlaylist)
+                    removed.Add(playlist);
+            }
+
+            if (added.Count == 0 && removed.Count == 0)
+                continue;
+
+            var remainingCount =
+                manifestEntry.InPlaylists.Count + added.Count - removed.Count;
+
+            message += $"\n{item.Title}";
+            if (added.Count > 0)
+            {
+                message += "\n  Added to playlists:";
+                foreach (var p in added)
+                    message += $"\n    \u2022 {p.PlaylistTitle}";
+            }
+            if (removed.Count > 0)
+            {
+                message += "\n  Removed from playlists:";
+                foreach (var p in removed)
+                    message += $"\n    \u2022 {p.PlaylistTitle}";
+            }
+            if (remainingCount == 0)
+            {
+                message += "\n  \u26A0 This track will be DELETED (no remaining playlists)";
+                willBeDeleted.Add(item.Title);
+            }
+        }
+
+        if (string.IsNullOrEmpty(message))
+        {
+            vm.ShowManageTrackPlaylists = false;
+            vm.ShowSyncedPlaylists = true;
+            return true;
+        }
+
+        var dialog = new ConfirmationDialog("Track Playlist Changes", message);
+        var result = await dialog.ShowDialog<bool>(this);
+
+        if (!result)
+            return false;
+
+        // Apply changes
+        var toDeleteFromManifest = new HashSet<long>();
+
+        foreach (var item in vm.AllManageableTracks)
+        {
+            var trackIdStr = item.TrackId.ToString();
+            if (!_manifest.Tracks.TryGetValue(trackIdStr, out var manifestEntry))
+                continue;
+
+            var added = new List<PotentiallyDeletedPlaylistItem>();
+            var removed = new List<PotentiallyDeletedPlaylistItem>();
+
+            foreach (var playlist in item.Playlists)
+            {
+                var wasInPlaylist = item.OriginalPlaylistIds.Contains(playlist.PlaylistId);
+                if (playlist.KeepInPlaylist && !wasInPlaylist)
+                    added.Add(playlist);
+                else if (!playlist.KeepInPlaylist && wasInPlaylist)
+                    removed.Add(playlist);
+            }
+
+            if (added.Count == 0 && removed.Count == 0)
+                continue;
+
+            // Handle removals
+            foreach (var playlist in removed)
+            {
+                Console.WriteLine(
+                    $"Removing {item.Title} from playlist {playlist.PlaylistTitle}"
+                );
+                await _syncService!.RemoveSymlinks(item.TrackFileName, playlist.PlaylistPath);
+                await _syncService!.RemoveTracksFromPlaylists(
+                    item.TrackId,
+                    playlist.PlaylistId,
+                    _manifest
+                );
+                await _syncService!.RemovePlaylistsFromTracks(
+                    item.TrackId,
+                    playlist.PlaylistId,
+                    _manifest
+                );
+            }
+
+            // Handle additions
+            foreach (var playlist in added)
+            {
+                Console.WriteLine(
+                    $"Adding {item.Title} to playlist {playlist.PlaylistTitle}"
+                );
+                await _syncService!.AddSymlink(
+                    item.TrackFileName,
+                    playlist.PlaylistPath,
+                    _tracksPath
+                );
+                await _syncService!.AddTrackToPlaylist(
+                    item.TrackId,
+                    playlist.PlaylistId,
+                    _manifest
+                );
+            }
+
+            // Check if track is orphaned
+            if (manifestEntry.InPlaylists.Count == 0)
+            {
+                Console.WriteLine(
+                    $"Track {item.Title} has no remaining playlists — deleting files"
+                );
+                toDeleteFromManifest.Add(item.TrackId);
+                await _syncService!.DeleteTrackAndArtwork(
+                    item.TrackFilePath,
+                    item.ArtworkPath
+                );
+            }
+        }
+
+        // Delete orphaned tracks from manifest
+        if (toDeleteFromManifest.Count > 0)
+        {
+            await _syncService!.DeleteTracksFromManifest(toDeleteFromManifest, _manifest);
+
+            foreach (var track in toDeleteFromManifest)
+            {
+                if (_manifest.PotentiallyDeletedTracks.TryGetValue(track, out var playlists))
+                    _manifest.PotentiallyDeletedTracks.Remove(track);
+            }
+        }
+
+        ManifestStore.Save(_manifest, _manifestPath);
+
+        vm.ShowManageTrackPlaylists = false;
+        vm.ShowSyncedPlaylists = true;
+        return true;
+    }
+
+    private void OnCancelManageTrackPlaylists()
+    {
+        Console.WriteLine("Cancelling Manage Out of Sync Tracks");
+        var vm = (MainWindowViewModel)DataContext!;
+        vm.ShowManageTrackPlaylists = false;
+        vm.ShowSyncedPlaylists = true;
+    }
+
+    private async void OnOpenSoundCloudClicked(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        try
+        {
+            Process.Start(new ProcessStartInfo
+            {
+                FileName = "https://soundcloud.com/you/library",
+                UseShellExecute = true
+            });
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Failed to open SoundCloud: {ex.Message}");
+        }
+    }
+
+    private async void OnBrowseDownloadFolderClicked(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        try
+        {
+            var psi = new ProcessStartInfo
+            {
+                FileName = "zenity",
+                Arguments = "--file-selection --directory --title=\"Select Download Folder\"",
+                RedirectStandardOutput = true,
+                StandardOutputEncoding = System.Text.Encoding.UTF8,
+                UseShellExecute = false,
+            };
+
+            var process = Process.Start(psi);
+            if (process == null)
+            {
+                Console.WriteLine("Failed to start zenity");
+                return;
+            }
+
+            await process.WaitForExitAsync();
+            var path = (await process.StandardOutput.ReadToEndAsync())?.Trim();
+
+            if (!string.IsNullOrEmpty(path))
+            {
+                var vm = (MainWindowViewModel)DataContext!;
+                var suffix = Path.DirectorySeparatorChar + "SoundCloud Archiver";
+                var finalPath = path.TrimEnd(Path.DirectorySeparatorChar) + suffix;
+                vm.SetupDownloadPath = finalPath;
+                Console.WriteLine($"Picked download folder: {finalPath}");
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Folder picker failed: {ex.Message}");
+        }
+    }
+
+    private void OnShowSetup()
+    {
+        Console.WriteLine("Showing setup");
+        var vm = (MainWindowViewModel)DataContext!;
+
+        vm.SetupProfileUrl = _profileUrl;
+        vm.SetupDownloadPath = _archivePath;
+
+        vm.ShowSetup = true;
+        vm.ShowSyncedPlaylists = false;
+    }
+
+    private async Task<bool> OnSaveSetup()
+    {
+        Console.WriteLine("Saving setup");
+        var vm = (MainWindowViewModel)DataContext!;
+
+        var profileUrl = vm.SetupProfileUrl?.Trim() ?? "";
+        var downloadPath = vm.SetupDownloadPath?.Trim() ?? "";
+
+        // Validate profile URL
+        if (string.IsNullOrEmpty(profileUrl))
+        {
+            var dialog = new ConfirmationDialog("Invalid URL", "Please enter your SoundCloud profile URL.");
+            await dialog.ShowDialog<bool>(this);
+            return false;
+        }
+
+        // Validate with SoundCloud
+        try
+        {
+            Console.WriteLine($"Validating profile URL: {profileUrl}");
+            var user = await _soundcloud!.Users.GetAsync(profileUrl);
+            Console.WriteLine($"Found user: {user.Username} ({user.PermalinkUrl})");
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"URL validation failed: {ex.Message}");
+            var dialog = new ConfirmationDialog(
+                "Invalid Profile URL",
+                $"Could not find a SoundCloud profile at:\n{profileUrl}\n\nPlease check the URL and try again."
+            );
+            await dialog.ShowDialog<bool>(this);
+            return false;
+        }
+
+        // Validate download path
+        if (string.IsNullOrEmpty(downloadPath))
+        {
+            var dialog = new ConfirmationDialog("Invalid Path", "Please select a download folder.");
+            await dialog.ShowDialog<bool>(this);
+            return false;
+        }
+
+        // Check if download path changed
+        var previousPath = _manifest.AppState.DownloadPath;
+        var deleteOldFolder = false;
+        if (!string.IsNullOrEmpty(previousPath) && previousPath != downloadPath)
+        {
+            var confirmDialog = new ConfirmationDialog(
+                "Download Path Changed",
+                $"Your download path has changed from:\n{previousPath}\n\nto:\n{downloadPath}\n\n"
+                    + "Do you want to continue?",
+                "Delete old folder and all contents",
+                false
+            );
+            var proceed = await confirmDialog.ShowDialog<bool>(this);
+            if (!proceed)
+                return false;
+            deleteOldFolder = confirmDialog.IsCheckBoxChecked;
+        }
+
+        // Delete old folder if requested
+        if (deleteOldFolder && !string.IsNullOrEmpty(previousPath) && Directory.Exists(previousPath))
+        {
+            Console.WriteLine($"Deleting old download folder: {previousPath}");
+            try
+            {
+                Directory.Delete(previousPath, recursive: true);
+                Console.WriteLine("Old folder deleted successfully");
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Failed to delete old folder: {ex.Message}");
+            }
+        }
+
+        // Create all necessary directories
+        var dirs = new[]
+        {
+            downloadPath,
+            Path.Combine(downloadPath, "tracks"),
+            Path.Combine(downloadPath, "artwork"),
+            Path.Combine(downloadPath, "playlists"),
+            Path.Combine(downloadPath, "playlists", "liked"),
+        };
+        foreach (var dir in dirs)
+        {
+            if (!Directory.Exists(dir))
+                Directory.CreateDirectory(dir);
+        }
+
+        var tracksPath = Path.Combine(downloadPath, "tracks");
+
+        // Store the previous config to check if SoundCloudClient needs update
+        var prevProfileUrl = _profileUrl;
+        var prevArchivePath = _archivePath;
+
+        // Update fields
+        _profileUrl = profileUrl;
+        _archivePath = downloadPath;
+
+        // Save to manifest
+        _manifest.AppState.DownloadPath = downloadPath;
+
+        // Save to appsettings.local.json
+        try
+        {
+            var localSettings = new Dictionary<string, object>
+            {
+                ["SoundCloud"] = new Dictionary<string, object>
+                {
+                    ["ProfileUrl"] = profileUrl,
+                    ["ClientId"] = _soundcloud?.ClientId ?? "",
+                },
+                ["Archiver"] = new Dictionary<string, object>
+                {
+                    ["DownloadPath"] = downloadPath,
+                },
+            };
+
+            var json = JsonSerializer.Serialize(
+                localSettings,
+                new JsonSerializerOptions { WriteIndented = true }
+            );
+            File.WriteAllText("appsettings.local.json", json);
+            Console.WriteLine("Saved appsettings.local.json");
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Failed to save appsettings.local.json: {ex.Message}");
+        }
+
+        // Update paths in manifest if archive path changed
+        if (prevArchivePath != downloadPath)
+        {
+            foreach (var (id, tracked) in _manifest.TrackedPlaylists)
+            {
+                if (id == ManifestStore.LikedPlaylistId)
+                {
+                    tracked.FolderPath = Path.Combine(downloadPath, "playlists", "liked");
+                }
+                else
+                {
+                    var folderName = $"{tracked.Title}_{tracked.Permalink}".Replace("/", "_");
+                    tracked.FolderPath = Path.Combine(downloadPath, "playlists", folderName);
+                }
+            }
+
+            foreach (var (idStr, track) in _manifest.Tracks)
+            {
+                track.FilePath = Path.Combine(downloadPath, "tracks", track.FileName);
+            }
+
+            _manifest.AppState.DownloadPath = downloadPath;
+        }
+
+        // Recreate services with new paths if they changed
+        if (prevArchivePath != downloadPath || prevProfileUrl != profileUrl)
+        {
+            _artwork = new ArtworkService(Path.Combine(downloadPath, "artwork"));
+            _syncService = new SyncService(_soundcloud!, profileUrl, tracksPath, _artwork);
+            _folderService = new FolderService(downloadPath, Path.Combine(downloadPath, "playlists", "liked"));
+        }
+
+        // Ensure playlist folders exist at the new path
+        if (prevArchivePath != downloadPath)
+        {
+            _folderService!.CreateAllFolders();
+            _folderService.CreateTrackedPlaylistFolders(_manifest);
+        }
+
+        // Mark setup as complete so user doesn't have to re-enter if app closes mid-sync
+        var isFirstTime = !_manifest.AppState.IsInitialSetupComplete;
+        _manifest.AppState.IsInitialSetupComplete = true;
+        ManifestStore.Save(_manifest, _manifestPath);
+
+        vm.ShowSetup = false;
+
+        if (isFirstTime)
+        {
+            // First time setup
+            _playlistSelectionComplete = new TaskCompletionSource<bool>();
+            await ShowPlaylistSelectionAsync();
+            var saved = await _playlistSelectionComplete.Task;
+            if (saved)
+                await SyncTracksAsync();
+        }
+        else
+        {
+            // Came from synced playlists view
+            await OnSyncNow();
+        }
+
+        return true;
     }
 }

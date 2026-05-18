@@ -14,8 +14,14 @@
         <ScrollViewer Grid.Row="1"
             MaxHeight="300" VerticalScrollBarVisibility="Auto"
             VerticalAlignment="Center">
-            <TextBlock Text="{Binding Message}"
-                TextWrapping="Wrap" FontSize="18" />
+            <StackPanel>
+                <TextBlock Text="{Binding Message}"
+                    TextWrapping="Wrap" FontSize="18" />
+                <CheckBox IsChecked="{Binding IsChecked}"
+                    IsVisible="{Binding ShowCheckbox}"
+                    Content="{Binding CheckboxLabel}"
+                    Margin="0 15 0 0" />
+            </StackPanel>
         </ScrollViewer>
 
         <StackPanel Grid.Row="2" Orientation="Horizontal"

@@ -8,7 +8,7 @@ namespace soundCloudArchiver.ViewModels;
 
 using soundCloudArchiver.Models;
 
-public partial class PotentiallyDeletedTrackViewModel : ViewModelBase
+public partial class ManageOutOfSyncTracksViewModel : ViewModelBase
 {
     [ObservableProperty]
     private long _trackId;
@@ -34,23 +34,19 @@ public partial class PotentiallyDeletedTrackViewModel : ViewModelBase
     [ObservableProperty]
     private bool _isKept;
 
-    [ObservableProperty]
-    private bool _isRemovedFromSoundCloud;
-
-    // Store playlistId as key and playlistPath as value
-    public Dictionary<string, string> DeleteFromPlaylists { get; set; } = new();
+    public HashSet<long> OriginalPlaylistIds { get; set; } = new();
 
     public ObservableCollection<PotentiallyDeletedPlaylistItem> Playlists { get; } = new();
 
     [RelayCommand]
-    private void KeepInAll()
+    private void CheckAll()
     {
         foreach (var p in Playlists)
             p.KeepInPlaylist = true;
     }
 
     [RelayCommand]
-    private void KeepInNone()
+    private void UncheckAll()
     {
         foreach (var p in Playlists)
             p.KeepInPlaylist = false;

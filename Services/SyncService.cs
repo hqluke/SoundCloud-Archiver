@@ -166,8 +166,8 @@ public class SyncService
             return _soundcloud.Users.GetLikedTracksAsync(_profileUrl).Take(5);
         // return _soundcloud.Users.GetLikedTracksAsync(_profileUrl);
 
-        return _soundcloud.Playlists.GetTracksAsync(playlist.PermalinkUrl).Take(5);
-        // return _soundcloud.Playlists.GetTracksAsync(playlist.PermalinkUrl);
+        // return _soundcloud.Playlists.GetTracksAsync(playlist.PermalinkUrl).Take(5);
+        return _soundcloud.Playlists.GetTracksAsync(playlist.PermalinkUrl);
     }
 
     public static void FindPotentiallyDeletedTracks(
@@ -384,6 +384,44 @@ public class SyncService
         {
             manifest.PotentiallyDeletedTracks.Remove(trackId);
             Console.WriteLine($"Removed {trackId} from PotentiallyDeletedTracks");
+        }
+    }
+
+    public async Task AddSymlink(string trackFileName, string playlistFolderPath, string tracksPath)
+    {
+        var sourcePath = Path.Combine(tracksPath, trackFileName);
+        var symlinkPath = Path.Combine(playlistFolderPath, trackFileName);
+
+        if (!File.Exists(sourcePath))
+        {
+            Console.WriteLine(
+                $"Source track file {sourcePath} does not exist, cannot create symlink"
+            );
+            return;
+        }
+
+        if (File.Exists(symlinkPath))
+        {
+            Console.WriteLine($"Symlink {symlinkPath} already exists, skipping");
+            return;
+        }
+
+        File.CreateSymbolicLink(symlinkPath, sourcePath);
+        Console.WriteLine($"Created symlink {symlinkPath} -> {sourcePath}");
+    }
+
+    public async Task AddTrackToPlaylist(long trackId, long playlistId, Manifest manifest)
+    {
+        if (manifest.TrackedPlaylists.TryGetValue(playlistId, out var playlist))
+        {
+            playlist.TrackIds.Add(trackId);
+            Console.WriteLine($"Added {trackId} to playlist {playlistId}");
+        }
+
+        if (manifest.Tracks.TryGetValue(trackId.ToString(), out var track))
+        {
+            track.InPlaylists.Add(playlistId);
+            Console.WriteLine($"Added playlist {playlistId} to track {trackId}");
         }
     }
 }

@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Threading.Tasks;
 using CommunityToolkit.Mvvm.ComponentModel;
@@ -39,6 +40,25 @@ public partial class MainWindowViewModel : ViewModelBase
     private bool _showPotentiallyDeletedTracks;
 
     [ObservableProperty]
+    private bool _showSetup;
+
+    [ObservableProperty]
+    private string _setupProfileUrl = "";
+
+    [ObservableProperty]
+    private string _setupDownloadPath = "";
+
+    [ObservableProperty]
+    private bool _showManageTrackPlaylists;
+
+    [ObservableProperty]
+    private string _manageTrackSearch = "";
+
+    public List<ManageOutOfSyncTracksViewModel> AllManageableTracks { get; } = new();
+
+    public ObservableCollection<ManageOutOfSyncTracksViewModel> ManageableTracks { get; } = new();
+
+    [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(IsNotLoadingPlaylists))]
     private bool _isLoadingPlaylists;
 
@@ -58,6 +78,11 @@ public partial class MainWindowViewModel : ViewModelBase
     public event Func<Task>? OnShowPlaylistSelection;
     public event Action? OnShowSyncedPlaylistView;
     public event Func<Task<bool>>? OnPotentiallyDeletedTracksContinue;
+    public event Func<Task<bool>>? OnSaveSetup;
+    public event Action? OnShowSetup;
+    public event Func<Task>? OnShowManageTrackPlaylists;
+    public event Func<Task<bool>>? OnSaveManageTrackPlaylists;
+    public event Action? OnCancelManageTrackPlaylists;
 
     [RelayCommand]
     private async Task ContinueFromPotentiallyDeletedTracks()
@@ -127,5 +152,78 @@ public partial class MainWindowViewModel : ViewModelBase
     {
         if (OnSyncNow != null)
             await OnSyncNow.Invoke();
+    }
+
+    [RelayCommand]
+    private async Task SaveSetup()
+    {
+        if (OnSaveSetup != null)
+            await OnSaveSetup.Invoke();
+    }
+
+    [RelayCommand]
+    private void OpenSetup()
+    {
+        OnShowSetup?.Invoke();
+    }
+
+    [RelayCommand]
+    private void SearchManageTracks()
+    {
+        var search = ManageTrackSearch?.Trim().ToLowerInvariant() ?? "";
+        ManageableTracks.Clear();
+        foreach (var track in AllManageableTracks)
+        {
+            if (string.IsNullOrEmpty(search) ||
+                track.Title.ToLowerInvariant().Contains(search) ||
+                track.Artist.ToLowerInvariant().Contains(search))
+                ManageableTracks.Add(track);
+        }
+    }
+
+    [RelayCommand]
+    private void ClearManageTrackSearch()
+    {
+        ManageTrackSearch = "";
+        SearchManageTracks();
+    }
+
+    [RelayCommand]
+    private async Task OpenManageTrackPlaylists()
+    {
+        if (OnShowManageTrackPlaylists != null)
+            await OnShowManageTrackPlaylists.Invoke();
+    }
+
+    [RelayCommand]
+    private async Task SaveManageTrackPlaylists()
+    {
+        if (OnSaveManageTrackPlaylists != null)
+            await OnSaveManageTrackPlaylists.Invoke();
+    }
+
+    [RelayCommand]
+    private void CancelManageTrackPlaylists()
+    {
+        foreach (var track in AllManageableTracks)
+        {
+            foreach (var playlist in track.Playlists)
+            {
+                playlist.KeepInPlaylist = track.OriginalPlaylistIds.Contains(playlist.PlaylistId);
+            }
+        }
+    }
+
+    [RelayCommand]
+    private void BackManageTrackPlaylists()
+    {
+        foreach (var track in AllManageableTracks)
+        {
+            foreach (var playlist in track.Playlists)
+            {
+                playlist.KeepInPlaylist = track.OriginalPlaylistIds.Contains(playlist.PlaylistId);
+            }
+        }
+        OnCancelManageTrackPlaylists?.Invoke();
     }
 }

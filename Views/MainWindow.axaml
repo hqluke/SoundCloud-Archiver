@@ -37,6 +37,61 @@
             </StackPanel>
         </StackPanel>
 
+        <!-- Setup Panel -->
+        <Panel IsVisible="{Binding ShowSetup}">
+            <StackPanel VerticalAlignment="Center">
+                <TextBlock Text="Archive Setup" FontSize="34" FontWeight="Bold"
+                    HorizontalAlignment="Center" Margin="0 14 0 7" />
+                <TextBlock Text="Paste your SoundCloud profile URL"
+                    FontSize="18" FontWeight="SemiBold"
+                    HorizontalAlignment="Center" Margin="0 0 0 4" />
+                <TextBlock
+                    Text="Go to soundcloud, click your avatar, click profile, then copy the full URL from your browser's address bar."
+                    TextWrapping="Wrap" MaxWidth="500"
+                    HorizontalAlignment="Center" TextAlignment="Center"
+                    Margin="0 0 0 4" />
+                <Button Content="Open my SoundCloud"
+                    FontSize="13"
+                    Background="Transparent"
+                    BorderThickness="0"
+                    Foreground="#1976D2"
+                    Cursor="Hand"
+                    HorizontalAlignment="Center"
+                    Margin="0 0 0 4"
+                    Click="OnOpenSoundCloudClicked" />
+                <TextBox Text="{Binding SetupProfileUrl}"
+                    Width="400"
+                    PlaceholderText="https://soundcloud.com/your-username"
+                    Margin="0 0 0 4" />
+                <TextBlock
+                    Text="Expected format: https://soundcloud.com/your-username"
+                    FontSize="12" Foreground="#888888"
+                    HorizontalAlignment="Center"
+                    Margin="0 0 0 14" />
+                <TextBlock Text="Select download folder"
+                    FontSize="18" FontWeight="SemiBold"
+                    HorizontalAlignment="Center" Margin="0 0 0 4" />
+                <StackPanel Orientation="Horizontal" HorizontalAlignment="Center"
+                    Margin="0 0 0 4">
+                    <TextBox Text="{Binding SetupDownloadPath}"
+                        Width="340"
+                        PlaceholderText="/path/to/download/folder" />
+                    <Button Content="Browse"
+                        Margin="7 0 0 0"
+                        Click="OnBrowseDownloadFolderClicked" />
+                </StackPanel>
+                <TextBlock
+                    Text="Tracks and playlists will be saved to this folder."
+                    FontSize="12" Foreground="#888888"
+                    HorizontalAlignment="Center"
+                    Margin="0 0 0 14" />
+                <Button Command="{Binding SaveSetupCommand}"
+                    Content="Save &amp; Continue"
+                    HorizontalAlignment="Center"
+                    Margin="0 14 0 0" />
+            </StackPanel>
+        </Panel>
+
         <!-- Playlist Selection Panel -->
         <Panel IsVisible="{Binding IsPlaylistSelectionVisible}">
             <StackPanel VerticalAlignment="Center">
@@ -138,6 +193,15 @@
                                                 TextWrapping="Wrap"
                                                 MaxWidth="308"
                                                 HorizontalAlignment="Center" />
+                                            <TextBlock
+                                                Text="Removed from SoundCloud"
+                                                FontSize="12"
+                                                FontStyle="Italic"
+                                                Foreground="#888888"
+                                                TextWrapping="Wrap"
+                                                MaxWidth="308"
+                                                HorizontalAlignment="Center"
+                                                IsVisible="{Binding IsRemovedFromSoundCloud}" />
                                         </StackPanel>
 
                                         <ScrollViewer Grid.Row="2"
@@ -242,6 +306,133 @@
                     <Button Command="{Binding ShowPlaylistSelectionCommand}"
                         Content="Select Playlists to Track"
                         Margin="10 0 0 0" />
+                    <Button Command="{Binding OpenManageTrackPlaylistsCommand}"
+                        Content="Manage out of sync tracks"
+                        Margin="10 0 0 0" />
+                    <Button Command="{Binding OpenSetupCommand}"
+                        Content="Setup"
+                        Margin="10 0 0 0" />
+                </StackPanel>
+            </StackPanel>
+        </Panel>
+
+        <!-- Manage Out of Sync Tracks Panel -->
+        <Panel IsVisible="{Binding ShowManageTrackPlaylists}">
+            <StackPanel VerticalAlignment="Center">
+                <TextBlock Text="Manage Out of Sync Tracks" FontSize="34" FontWeight="Bold"
+                    HorizontalAlignment="Center" Margin="0 14 0 7" />
+                <TextBlock
+                    Text="These tracks were removed from SoundCloud but you chose to keep them in your archive."
+                    HorizontalAlignment="Center"
+                    Margin="0 0 0 4" />
+                <TextBlock
+                    Text="Select which playlists they should appear in."
+                    HorizontalAlignment="Center"
+                    Margin="0 0 0 14" />
+                <StackPanel Orientation="Horizontal" HorizontalAlignment="Center"
+                    Margin="0 0 0 14">
+                    <TextBox PlaceholderText="enter track name"
+                        Text="{Binding ManageTrackSearch}"
+                        Width="300"
+                        KeyDown="OnManageTrackSearchKeyDown" />
+                    <Button Command="{Binding SearchManageTracksCommand}"
+                        Content="Search"
+                        Margin="7 0 0 0" />
+                    <Button Command="{Binding ClearManageTrackSearchCommand}"
+                        Content="Clear"
+                        Margin="7 0 0 0" />
+                </StackPanel>
+                <ScrollViewer VerticalScrollBarVisibility="Auto"
+                    MaxHeight="700">
+                    <ItemsControl ItemsSource="{Binding ManageableTracks}">
+                        <ItemsControl.ItemsPanel>
+                            <ItemsPanelTemplate>
+                                <WrapPanel Orientation="Horizontal"
+                                    HorizontalAlignment="Center" />
+                            </ItemsPanelTemplate>
+                        </ItemsControl.ItemsPanel>
+                        <ItemsControl.DataTemplates>
+                            <DataTemplate x:DataType="vm:ManageOutOfSyncTracksViewModel">
+                                <Border Width="364" Margin="14" Padding="14">
+                                    <Grid RowDefinitions="Auto,Auto,*,Auto" RowSpacing="11">
+                                        <Image Grid.Row="0"
+                                            Source="{Binding ArtworkBitmap}"
+                                            Width="280" Height="280"
+                                            HorizontalAlignment="Center"
+                                            Stretch="Uniform" />
+
+                                        <StackPanel Grid.Row="1"
+                                            HorizontalAlignment="Center">
+                                            <TextBlock
+                                                Text="{Binding Title}"
+                                                FontSize="20"
+                                                FontWeight="Bold"
+                                                TextWrapping="Wrap"
+                                                MaxWidth="308"
+                                                HorizontalAlignment="Center" />
+                                            <TextBlock
+                                                Text="{Binding Artist}"
+                                                FontSize="14"
+                                                TextWrapping="Wrap"
+                                                MaxWidth="308"
+                                                HorizontalAlignment="Center" />
+                                        </StackPanel>
+
+                                        <ScrollViewer Grid.Row="2"
+                                            Height="224"
+                                            VerticalScrollBarVisibility="Auto">
+                                            <ItemsControl ItemsSource="{Binding Playlists}">
+                                                <ItemsControl.ItemsPanel>
+                                                    <ItemsPanelTemplate>
+                                                        <WrapPanel HorizontalAlignment="Center"
+                                                            ItemWidth="168" />
+                                                    </ItemsPanelTemplate>
+                                                </ItemsControl.ItemsPanel>
+                                                <ItemsControl.DataTemplates>
+                                                    <DataTemplate
+                                                        x:DataType="models:PotentiallyDeletedPlaylistItem">
+                                                        <CheckBox
+                                                            IsChecked="{Binding KeepInPlaylist}"
+                                                            HorizontalAlignment="Center"
+                                                            HorizontalContentAlignment="Center"
+                                                            Margin="8 6">
+                                                            <TextBlock
+                                                                Text="{Binding PlaylistTitle}"
+                                                                TextAlignment="Center"
+                                                                TextWrapping="NoWrap"
+                                                                TextTrimming="CharacterEllipsis"
+                                                                MaxWidth="126" />
+                                                        </CheckBox>
+                                                    </DataTemplate>
+                                                </ItemsControl.DataTemplates>
+                                            </ItemsControl>
+                                        </ScrollViewer>
+
+                                        <StackPanel Grid.Row="3"
+                                            Orientation="Horizontal"
+                                            HorizontalAlignment="Center">
+                                            <Button Command="{Binding CheckAllCommand}"
+                                                Content="Check All" />
+                                            <Button Command="{Binding UncheckAllCommand}"
+                                                Content="Uncheck All"
+                                                Margin="7 0 0 0" />
+                                        </StackPanel>
+                                    </Grid>
+                                </Border>
+                            </DataTemplate>
+                        </ItemsControl.DataTemplates>
+                    </ItemsControl>
+                </ScrollViewer>
+                <StackPanel Orientation="Horizontal" HorizontalAlignment="Center"
+                    Margin="0 14 0 14">
+                    <Button Command="{Binding SaveManageTrackPlaylistsCommand}"
+                        Content="Save Changes" />
+                    <Button Command="{Binding CancelManageTrackPlaylistsCommand}"
+                        Content="Cancel"
+                        Margin="14 0 0 0" />
+                    <Button Command="{Binding BackManageTrackPlaylistsCommand}"
+                        Content="Back"
+                        Margin="14 0 0 0" />
                 </StackPanel>
             </StackPanel>
         </Panel>
