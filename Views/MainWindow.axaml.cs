@@ -677,6 +677,41 @@ public partial class MainWindow : Window
             );
         }
 
+        // Retry any failed downloads using fallback methods
+        var vm = (MainWindowViewModel)DataContext!;
+        vm.CurrentTrack = null;
+        vm.ShowAlternativeDownload = true;
+        await _syncService!.DownloadFailedTracksWithFallbackAsync(_manifest, _manifestPath,
+            (title, artist, artworkPath, attempt, percent, total) =>
+            {
+                var vmm = (MainWindowViewModel)DataContext!;
+                vmm.FallbackTrackTitle = title;
+                vmm.FallbackArtist = artist;
+                vmm.AlternativeDownloadStatus =
+                    percent > 0
+                        ? $"Retrying ({attempt}/2) — {percent}%"
+                        : $"Retrying ({attempt}/2) — this may take a while";
+
+                if (attempt == 1)
+                    vmm.AlternativeDownloadStatus = $"yt-dlp — {vmm.AlternativeDownloadStatus}";
+                else
+                    vmm.AlternativeDownloadStatus = $"klickaud — {vmm.AlternativeDownloadStatus}";
+
+                vmm.AlternativeDownloadPercent = percent;
+
+                // Load artwork from saved file
+                if (!string.IsNullOrEmpty(artworkPath) && File.Exists(artworkPath))
+                {
+                    try
+                    {
+                        vmm.FallbackArtworkBitmap = _artwork!.LoadBitmap(artworkPath);
+                    }
+                    catch { }
+                }
+            }
+        );
+        vm.ShowAlternativeDownload = false;
+
         PlaylistSeclectionCompleted(this, EventArgs.Empty);
     }
 

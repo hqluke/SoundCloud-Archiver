@@ -13,6 +13,7 @@ public partial class MainWindowViewModel : ViewModelBase
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(HasTrack))]
     [NotifyPropertyChangedFor(nameof(IsNullTrack))]
+    [NotifyPropertyChangedFor(nameof(ShowPreparingText))]
     private Track? _currentTrack;
 
     [ObservableProperty]
@@ -20,6 +21,7 @@ public partial class MainWindowViewModel : ViewModelBase
 
     public bool HasTrack => CurrentTrack != null;
     public bool IsNullTrack => CurrentTrack == null;
+    public bool ShowPreparingText => IsNullTrack && !ShowAlternativeDownload;
 
     [ObservableProperty]
     private Avalonia.Media.Imaging.Bitmap? _artworkBitmap;
@@ -32,6 +34,25 @@ public partial class MainWindowViewModel : ViewModelBase
 
     [ObservableProperty]
     private bool _showTracksSyncing;
+
+    [ObservableProperty]
+    private string _alternativeDownloadStatus = "";
+
+    [ObservableProperty]
+    private int _alternativeDownloadPercent;
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(ShowPreparingText))]
+    private bool _showAlternativeDownload;
+
+    [ObservableProperty]
+    private string _fallbackTrackTitle = "";
+
+    [ObservableProperty]
+    private string _fallbackArtist = "";
+
+    [ObservableProperty]
+    private Avalonia.Media.Imaging.Bitmap? _fallbackArtworkBitmap;
 
     [ObservableProperty]
     private bool _isInitialSetupComplete;

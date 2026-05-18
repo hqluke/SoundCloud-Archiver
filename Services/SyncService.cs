@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Net.Http;
@@ -66,6 +67,7 @@ public class SyncService
 
             if (!manifest.Tracks.ContainsKey(trackId))
             {
+                var soundcloudUrl = track.PermalinkUrl?.ToString() ?? "";
                 currentTrack = manifest.Tracks[trackId] = new TrackManifestEntry
                 {
                     Id = track.Id,
@@ -75,6 +77,7 @@ public class SyncService
                     ArtworkPath = artworkPath,
                     FilePath = filePath,
                     FileName = fileName,
+                    SoundCloudUrl = soundcloudUrl,
                 };
             }
             else
@@ -82,6 +85,11 @@ public class SyncService
                 Console.WriteLine($"Track entry already exists in {playlist.Title}");
                 currentTrack = manifest.Tracks[trackId];
                 manifest.Tracks[trackId].InPlaylists.Add(playlist.Id);
+                if (string.IsNullOrEmpty(currentTrack.SoundCloudUrl))
+                {
+                    var soundcloudUrl = track.PermalinkUrl?.ToString() ?? "";
+                    currentTrack.SoundCloudUrl = soundcloudUrl;
+                }
             }
 
             if (!manifest.TrackedPlaylists[playlist.Id].TrackIds.Contains(track.Id))
@@ -423,5 +431,163 @@ public class SyncService
             track.InPlaylists.Add(playlistId);
             Console.WriteLine($"Added playlist {playlistId} to track {trackId}");
         }
+    }
+
+    public async Task<int> DownloadFailedTracksWithFallbackAsync(Manifest manifest, string manifestPath,
+        Action<string, string, string, int, int, int>? onProgress = null)
+    {
+        if (manifest.FailedDownloads.Count == 0)
+        {
+            Console.WriteLine("No failed downloads to retry");
+            return 0;
+        }
+
+        int retried = 0;
+        int succeeded = 0;
+        var failedIds = manifest.FailedDownloads.Keys.ToList();
+        var totalCount = failedIds.Count;
+
+        Console.WriteLine($"\n=== Retrying {totalCount} failed downloads with fallback ===");
+
+        foreach (var trackId in failedIds)
+        {
+            if (!manifest.FailedDownloads.TryGetValue(trackId, out var track))
+                continue;
+
+            var scUrl = track.SoundCloudUrl;
+            if (string.IsNullOrEmpty(scUrl))
+            {
+                Console.WriteLine($"  Skipping {track.Title} (ID {trackId}): no SoundCloudUrl in manifest");
+                continue;
+            }
+
+            var filePath = Path.Combine(_tracksPath, track.FileName);
+            if (File.Exists(filePath))
+            {
+                Console.WriteLine($"  {track.Title} already exists on disk, removing from FailedDownloads");
+                manifest.FailedDownloads.Remove(trackId);
+                ManifestStore.Save(manifest, manifestPath);
+                continue;
+            }
+
+            onProgress?.Invoke(track.Title, track.Artist, track.ArtworkPath, 1, 0, totalCount);
+            Console.WriteLine($"  Downloading {track.Title} via yt-dlp...");
+
+            try
+            {
+                var process = new Process
+                {
+                    StartInfo = new ProcessStartInfo
+                    {
+                        FileName = "yt-dlp",
+                        Arguments = $"-x --audio-format mp3 -o \"{filePath}\" -- \"{scUrl}\"",
+                        RedirectStandardOutput = true,
+                        RedirectStandardError = true,
+                        UseShellExecute = false,
+                        CreateNoWindow = true,
+                    }
+                };
+
+                var stderrBuilder = new System.Text.StringBuilder();
+
+                process.Start();
+
+                // Read stderr line by line to capture download progress
+                string? errLine;
+                while ((errLine = await process.StandardError.ReadLineAsync()) != null)
+                {
+                    stderrBuilder.AppendLine(errLine);
+                    // Parse yt-dlp download percentage from lines like:
+                    // [download]  45.6% of ~3.45MiB at 1.23MiB/s ETA 00:02
+                    if (errLine.Contains("%"))
+                    {
+                        var match = System.Text.RegularExpressions.Regex.Match(errLine,
+                            @"(\d+(?:\.\d+)?)%");
+                        if (match.Success && double.TryParse(
+                                match.Groups[1].Value,
+                                System.Globalization.NumberStyles.Any,
+                                System.Globalization.CultureInfo.InvariantCulture,
+                                out var pct))
+                        {
+                            onProgress?.Invoke(track.Title, track.Artist, track.ArtworkPath, 1, (int)pct, totalCount);
+                        }
+                    }
+                }
+
+                await process.WaitForExitAsync();
+                var stderr = stderrBuilder.ToString();
+
+                if (process.ExitCode == 0 && File.Exists(filePath))
+                {
+                    Console.WriteLine($"  Successfully downloaded {track.Title} via yt-dlp");
+
+                    // Remove from FailedDownloads
+                    manifest.FailedDownloads.Remove(trackId);
+
+                    // Create symlinks in all playlists this track belongs to
+                    foreach (var plId in track.InPlaylists)
+                    {
+                        if (manifest.TrackedPlaylists.TryGetValue(plId, out var pl))
+                        {
+                            var symlinkPath = Path.Combine(pl.FolderPath, track.FileName);
+                            if (!File.Exists(symlinkPath))
+                            {
+                                File.CreateSymbolicLink(symlinkPath, filePath);
+                                Console.WriteLine($"  Created symlink in {pl.Title}");
+                            }
+                        }
+                    }
+
+                    ManifestStore.Save(manifest, manifestPath);
+                    succeeded++;
+                }
+                else
+                {
+                    Console.WriteLine($"  yt-dlp failed for {track.Title}, trying klickaud...");
+                    if (!string.IsNullOrEmpty(stderr))
+                        Console.WriteLine(stderr);
+
+                    // Try klickaud.org as a second fallback
+                    onProgress?.Invoke(track.Title, track.Artist, track.ArtworkPath, 2, 0, totalCount);
+                    using var klickaud = new KlickaudDownloader();
+                    var klickaudOk = await klickaud.TryDownloadAsync(scUrl, filePath,
+                        percent => onProgress?.Invoke(track.Title, track.Artist, track.ArtworkPath, 2, percent, totalCount));
+                    if (klickaudOk)
+                    {
+                        Console.WriteLine($"  Successfully downloaded {track.Title} via klickaud");
+                        manifest.FailedDownloads.Remove(trackId);
+
+                        foreach (var plId in track.InPlaylists)
+                        {
+                            if (manifest.TrackedPlaylists.TryGetValue(plId, out var pl))
+                            {
+                                var symlinkPath = Path.Combine(pl.FolderPath, track.FileName);
+                                if (!File.Exists(symlinkPath))
+                                {
+                                    File.CreateSymbolicLink(symlinkPath, filePath);
+                                    Console.WriteLine($"  Created symlink in {pl.Title}");
+                                }
+                            }
+                        }
+
+                        ManifestStore.Save(manifest, manifestPath);
+                        succeeded++;
+                    }
+                    else
+                    {
+                        Console.WriteLine($"  Klickaud also failed for {track.Title}");
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"  Exception during yt-dlp for {track.Title}: {ex.Message}");
+            }
+
+            retried++;
+        }
+
+        Console.WriteLine($"=== Fallback download complete: {succeeded}/{retried} succeeded ===\n");
+        return succeeded;
     }
 }
